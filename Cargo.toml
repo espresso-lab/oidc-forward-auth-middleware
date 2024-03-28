@@ -10,5 +10,4 @@ salvo = { version = "0.64.0", features=[] }
 tokio = { version = "1", features = ["macros"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-rand = {}
 cookie = { version ="0.18", features = ["percent-encode"]}

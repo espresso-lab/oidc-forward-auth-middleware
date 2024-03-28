@@ -1355,7 +1355,6 @@ name = "traefik-oidc-forward-auth-middleware"
 version = "0.1.0"
 dependencies = [
  "cookie",
- "rand",
  "salvo",
  "tokio",
  "tracing",
