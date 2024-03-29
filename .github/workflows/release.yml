@@ -29,3 +29,5 @@ jobs:
         with:
           push: true
           tags: traefik-oidc-forward-auth-middleware:latest
+          secrets: |
+            GIT_AUTH_TOKEN=${{ secrets.GITHUB_TOKEN }}
