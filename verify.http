@@ -1,6 +1,8 @@
 GET http://127.0.0.1:3000/verify
 Cookie: traefik_oidc=1234
+X-Forwarded-Host: localhost
 
 ###
 GET http://127.0.0.1:3000/verify
 Cookie: traefik_oidc=1
+X-Forwarded-Host: localhost
