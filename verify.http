@@ -1,6 +1,6 @@
-GET http://127.0.0.1:8080/verify
+GET http://127.0.0.1:3000/verify
 Cookie: traefik_oidc=1234
 
 ###
-GET http://127.0.0.1:8080/verify
+GET http://127.0.0.1:3000/verify
 Cookie: traefik_oidc=1

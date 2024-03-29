@@ -16,5 +16,5 @@ RUN mv ./target/release/traefik-oidc-forward-auth-middleware ./app
 FROM scratch AS runtime
 WORKDIR /app
 COPY --from=builder /app/app /usr/local/bin/
-EXPOSE 8080
+EXPOSE 3000
 ENTRYPOINT ["/usr/local/bin/app"]

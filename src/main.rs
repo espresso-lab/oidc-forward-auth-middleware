@@ -77,6 +77,6 @@ async fn main() {
     tracing_subscriber::fmt().init();
 
     let router = Router::with_path("/verify").get(forward_auth_handler);
-    let acceptor = TcpListener::new("0.0.0.0:8080").bind().await;
+    let acceptor = TcpListener::new("0.0.0.0:3000").bind().await;
     Server::new(acceptor).serve(router).await;
 }
