@@ -1,6 +1,6 @@
-use salvo::prelude::*;
-use salvo::http::StatusCode;
 use cookie::Cookie;
+use salvo::http::StatusCode;
+use salvo::prelude::*;
 
 use std::default::Default;
 
@@ -9,7 +9,7 @@ use std::default::Default;
 
 // Examples: https://github.com/salvo-rs/salvo/blob/main/examples/csrf-cookie-store/src/main.rs
 
-fn get_auth_cookie(cookie_string: &str) -> String{
+fn get_auth_cookie(cookie_string: &str) -> String {
     let mut cookie_value = None;
     for cookie in Cookie::split_parse(cookie_string) {
         let cookie = cookie.unwrap();
@@ -25,7 +25,6 @@ fn get_auth_cookie(cookie_string: &str) -> String{
 
 #[handler]
 async fn authorizer(req: &mut Request, res: &mut Response, _depot: &mut Depot) {
-
     // let user = depot.get::<&str>("traefik_oidc").copied().unwrap_or("");
     // println!("JWT: {}", user);
 
@@ -36,13 +35,18 @@ async fn authorizer(req: &mut Request, res: &mut Response, _depot: &mut Depot) {
     }
     ////////////////////////////////
 
-
     ////////////////////////////////
     // JWT
-    let jwt_cookie = get_auth_cookie(req.headers().get("cookie").expect("").to_str().unwrap_or_default());
+    let jwt_cookie = get_auth_cookie(
+        req.headers()
+            .get("cookie")
+            .expect("")
+            .to_str()
+            .unwrap_or_default(),
+    );
     println!("JWT: {}", jwt_cookie);
 
-    let headerx =  match req.headers().get("X-Forwarded-Host") {
+    let headerx = match req.headers().get("X-Forwarded-Host") {
         Some(header) => header.to_str().unwrap_or(""),
         None => "",
     };
@@ -58,15 +62,13 @@ async fn authorizer(req: &mut Request, res: &mut Response, _depot: &mut Depot) {
 
     // res.headers_mut().insert(header::SERVER, HeaderValue::from_static("Salvo"));
 
-
-
     ////////////////
     // Response
     if jwt_cookie == "0" {
-        res.status_code(StatusCode::UNAUTHORIZED).render(Text::Plain("NOK"));
+        res.status_code(StatusCode::UNAUTHORIZED)
+            .render(Text::Plain("NOK"));
     } else if jwt_cookie == "1" {
         res.status_code(StatusCode::OK).render(Text::Plain("OK"));
-        
     } else {
         res.render(Redirect::temporary("https://salvo.rs/"));
     }
@@ -77,6 +79,6 @@ async fn main() {
     tracing_subscriber::fmt().init();
 
     let router = Router::with_path("/authorize").get(authorizer);
-    let acceptor = TcpListener::new("127.0.0.1:8080").bind().await;
+    let acceptor = TcpListener::new("0.0.0.0:8080").bind().await;
     Server::new(acceptor).serve(router).await;
 }
