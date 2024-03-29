@@ -26,4 +26,5 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: espresso-lab/traefik-oidc-forward-auth-middleware:latest
+          tags: ghcr.io/espresso-lab/traefik-oidc-forward-auth-middleware:latest
+          
