@@ -1,13 +1,19 @@
 [package]
-name = "traefik-oidc-forward-auth-middleware"
+name = "oidc-forward-auth-middleware"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-salvo = { version = "0.64.0", features=[] }
-tokio = { version = "1", features = ["macros"] }
+salvo = { version = "0.64.0", features = [] }
+tokio = { version = "1", features = ["macros", "full"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-cookie = { version ="0.18", features = ["percent-encode"]}
+cookie = { version = "0.18", features = ["percent-encode"] }
+openidconnect = { version = "3" }
+url = { version = "2", features = ["serde"] }
+serde = {}
+
+[dev-dependencies]
+rustfmt = {}

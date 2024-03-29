@@ -1,4 +1,4 @@
-# Traefik OIDC ForwardAuth Middleware
+# OIDC Forward Auth Middleware
 
 ## Purpose
 

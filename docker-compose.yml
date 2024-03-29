@@ -34,5 +34,5 @@ services:
       - "traefik.http.routers.whoami.middlewares=test-auth@docker"
       - "traefik.http.middlewares.test-auth.forwardauth.address=http://middleware:3000/verify"
       - "traefik.http.middlewares.test-auth.forwardauth.trustForwardHeader=true"
-      - "traefik.http.middlewares.test-auth.forwardauth.authResponseHeaders=X-Auth-User, X-Secret"
-      - "traefik.http.middlewares.test-auth.forwardauth.authRequestHeaders=Accept,X-CustomHeader"
+      - "traefik.http.middlewares.test-auth.forwardauth.authResponseHeaders=Authorization,Set-Cookie,Location"
+      - "traefik.http.middlewares.test-auth.forwardauth.authRequestHeaders=Accept,Cookie,Authorization"
