@@ -30,4 +30,5 @@ jobs:
         with:
           push: true
           tags: ghcr.io/espresso-lab/traefik-oidc-forward-auth-middleware:latest
+          platforms: linux/amd64,linux/arm64
           
