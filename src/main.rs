@@ -2,8 +2,6 @@ use cookie::Cookie;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 
-use std::default::Default;
-
 // Implement this:
 // https://github.com/ramosbugs/openidconnect-rs/blob/main/examples/gitlab.rs
 
@@ -24,7 +22,7 @@ fn get_auth_cookie(cookie_string: &str) -> String {
 }
 
 #[handler]
-async fn authorizer(req: &mut Request, res: &mut Response, _depot: &mut Depot) {
+async fn forward_auth_handler(req: &mut Request, res: &mut Response, _depot: &mut Depot) {
     // let user = depot.get::<&str>("traefik_oidc").copied().unwrap_or("");
     // println!("JWT: {}", user);
 
@@ -78,7 +76,7 @@ async fn authorizer(req: &mut Request, res: &mut Response, _depot: &mut Depot) {
 async fn main() {
     tracing_subscriber::fmt().init();
 
-    let router = Router::with_path("/authorize").get(authorizer);
+    let router = Router::with_path("/verify").get(forward_auth_handler);
     let acceptor = TcpListener::new("0.0.0.0:8080").bind().await;
     Server::new(acceptor).serve(router).await;
 }

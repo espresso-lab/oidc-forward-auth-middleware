@@ -1,0 +1,11 @@
+version: "3"
+services:
+  traefik-oidc-forward-auth-middleware:
+    build: .
+    develop:
+      watch:
+        - path: ./src
+          action: rebuild
+    # environment:
+    ports:
+      - 8080:8080
