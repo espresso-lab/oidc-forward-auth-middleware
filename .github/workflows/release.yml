@@ -31,4 +31,5 @@ jobs:
           push: true
           tags: ghcr.io/espresso-lab/traefik-oidc-forward-auth-middleware:latest
           platforms: linux/amd64,linux/arm64
-          
+          cache-from: type=registry,ref=ghcr.io/espresso-lab/traefik-oidc-forward-auth-middleware:buildcache
+          cache-to: type=registry,ref=ghcr.io/espresso-lab/traefik-oidc-forward-auth-middleware:buildcache,mode=max
