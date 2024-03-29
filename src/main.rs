@@ -72,11 +72,19 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response, _depot: &mu
     }
 }
 
+#[handler]
+async fn status(res: &mut Response) {
+    res.status_code(StatusCode::OK).render(Text::Html("Ok. ✅"));
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt().init();
 
-    let router = Router::with_path("/verify").get(forward_auth_handler);
+    let router = Router::new()
+        .push(Router::with_path("/status").get(status))
+        .push(Router::with_path("/verify").get(forward_auth_handler));
+
     let acceptor = TcpListener::new("0.0.0.0:3000").bind().await;
     Server::new(acceptor).serve(router).await;
 }
