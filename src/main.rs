@@ -32,21 +32,26 @@ fn handle_error<T: std::error::Error>(fail: &T, msg: &'static str) {
 
 #[derive(Clone)]
 struct OIDCProvider {
+    hostname: String,
     client_id: ClientId,
     client_secret: ClientSecret,
     issuer_url: IssuerUrl,
 }
 
 fn get_oidc_providers() -> Vec<OIDCProvider> {
+    let binding = get_env("AUTH_HOSTNAMES", None);
+    let hostnames = binding.split(",").collect::<Vec<_>>();
     let binding = get_env("AUTH_PROVIDER_URLS", None);
     let urls = binding.split(",").collect::<Vec<_>>();
     let binding = get_env("AUTH_CLIENT_IDS", None);
     let clients = binding.split(",").collect::<Vec<_>>();
     let binding = get_env("AUTH_SECRETS", None);
     let secrets = binding.split(",").collect::<Vec<_>>();
+
     urls.iter()
         .enumerate()
         .map(|(index, url)| OIDCProvider {
+            hostname: hostnames.get(index).unwrap().to_string(), // TODO: to lowercase
             client_id: ClientId::new(clients.get(index).unwrap().to_string()),
             client_secret: ClientSecret::new(secrets.get(index).unwrap().to_string()),
             issuer_url: IssuerUrl::new(url.to_string()).expect("Invalid issuer URL"),
@@ -58,14 +63,7 @@ fn get_oidc_providers() -> Vec<OIDCProvider> {
 fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
     get_oidc_providers()
         .iter()
-        .find(|provider| {
-            provider
-                .issuer_url
-                .url()
-                .host_str()
-                .expect("Invalid issuer URL")
-                == hostname
-        })
+        .find(|provider| provider.hostname == hostname)
         .cloned()
 }
 
@@ -84,6 +82,7 @@ fn get_auth_cookie(cookie_string: &str) -> String {
 
 #[handler]
 async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
+    // TODO: to lowercase
     let hostname = req
         .headers()
         .get("X-Forwarded-Host")
@@ -93,7 +92,7 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         .to_string();
 
     // Get the OIDC Provider
-    let oidc_provider = match get_oidc_provider_for_hostname(hostname) {
+    let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
         Some(val) => val,
         None => {
             return res
@@ -101,17 +100,12 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
                 .render(Text::Plain("No OIDC provider known for hostname."))
         }
     };
-
     let issuer_url = oidc_provider.issuer_url.url().to_string();
     let client_id = oidc_provider.client_id.to_string();
 
     // Load this on start and NOT per request
     let provider_metadata = tokio::task::spawn_blocking(move || {
-        let my_issuer_url = IssuerUrl::new(format!(
-            "https://{}/oauth2/openid/{}",
-            issuer_url, client_id
-        ))
-        .expect("Invalid issuer URL");
+        let my_issuer_url = IssuerUrl::new(issuer_url).expect("Invalid issuer URL");
 
         CoreProviderMetadata::discover(&my_issuer_url, http_client).unwrap_or_else(|err| {
             handle_error(&err, "Failed to discover OpenID Provider");
@@ -121,6 +115,8 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
     .await
     .unwrap();
 
+    let hostname2 = hostname.clone();
+
     // Set up the config for the GitLab OAuth2 process.
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
@@ -128,7 +124,7 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         Some(oidc_provider.client_secret),
     )
     .set_redirect_uri(
-        RedirectUrl::new("http://localhost:8080".to_string()) // TODO current host
+        RedirectUrl::new(format!("https://{}/auth_callback", hostname2).to_string())
             .expect("Invalid redirect URL"),
     );
 
@@ -141,7 +137,6 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
             CsrfToken::new_random,
             Nonce::new_random,
         )
-        .add_scope(Scope::new("openid".to_string()))
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
         .url();
@@ -197,6 +192,8 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         res.status_code(StatusCode::OK).render(Text::Plain("OK"));
     }
 
+    res.render(Redirect::temporary(authorize_url.to_string()));
+
     ////////////////////////////////
     // HEADERS
     // for (key, value) in req.headers().into_iter() {
@@ -207,13 +204,13 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
     ////////////////////////////////
     // JWT
 
-    let jwt_cookie = get_auth_cookie(
-        req.headers()
-            .get("cookie")
-            .expect("")
-            .to_str()
-            .unwrap_or_default(),
-    );
+    // let jwt_cookie = get_auth_cookie(
+    //     req.headers()
+    //         .get("cookie")
+    //         .expect("")
+    //         .to_str()
+    //         .unwrap_or_default(),
+    // );
     // println!("JWT: {}", jwt_cookie);
 
     // let headerx = match req.headers().get("X-Forwarded-Host") {
@@ -234,14 +231,14 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
 
     ////////////////
     // Response
-    if jwt_cookie == "0" {
-        res.status_code(StatusCode::UNAUTHORIZED)
-            .render(Text::Plain("NOK"));
-    } else if jwt_cookie == "1" {
-        res.status_code(StatusCode::OK).render(Text::Plain("OK"));
-    } else {
-        res.render(Redirect::temporary(authorize_url.to_string()));
-    }
+    // if jwt_cookie == "0" {
+    //     res.status_code(StatusCode::UNAUTHORIZED)
+    //         .render(Text::Plain("NOK"));
+    // } else if jwt_cookie == "1" {
+    //     res.status_code(StatusCode::OK).render(Text::Plain("OK"));
+    // } else {
+    //     res.render(Redirect::temporary(authorize_url.to_string()));
+    // }
 }
 
 #[handler]
