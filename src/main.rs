@@ -1,7 +1,6 @@
 use cookie::Cookie;
 use openidconnect::core::{
-    CoreClient, CoreGenderClaim, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata,
-    CoreResponseType,
+    CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
 };
 use openidconnect::reqwest::http_client;
 use openidconnect::{
@@ -10,6 +9,11 @@ use openidconnect::{
 };
 use salvo::http::StatusCode;
 use salvo::prelude::*;
+use std::env;
+
+fn get_env(key: &str, default: Option<&str>) -> String {
+    env::var(key).unwrap_or_else(|_| default.unwrap_or("").to_owned())
+}
 
 // Implement this:
 // https://github.com/ramosbugs/openidconnect-rs/blob/main/examples/gitlab.rs
@@ -20,26 +24,49 @@ fn handle_error<T: std::error::Error>(fail: &T, msg: &'static str) {
     let mut err_msg = format!("ERROR: {}", msg);
     let mut cur_fail: Option<&dyn std::error::Error> = Some(fail);
     while let Some(cause) = cur_fail {
-        err_msg += &format!("\n    caused by: {}", cause);
+        err_msg += &format!("\ncaused by: {}", cause);
         cur_fail = cause.source();
     }
     println!("{}", err_msg);
 }
 
+#[derive(Clone)]
 struct OIDCProvider {
     client_id: ClientId,
     client_secret: ClientSecret,
     issuer_url: IssuerUrl,
 }
 
+fn get_oidc_providers() -> Vec<OIDCProvider> {
+    let binding = get_env("AUTH_PROVIDER_URLS", None);
+    let urls = binding.split(",").collect::<Vec<_>>();
+    let binding = get_env("AUTH_CLIENT_IDS", None);
+    let clients = binding.split(",").collect::<Vec<_>>();
+    let binding = get_env("AUTH_SECRETS", None);
+    let secrets = binding.split(",").collect::<Vec<_>>();
+    urls.iter()
+        .enumerate()
+        .map(|(index, url)| OIDCProvider {
+            client_id: ClientId::new(clients.get(index).unwrap().to_string()),
+            client_secret: ClientSecret::new(secrets.get(index).unwrap().to_string()),
+            issuer_url: IssuerUrl::new(url.to_string()).expect("Invalid issuer URL"),
+        })
+        .collect()
+}
+
 // TODO: Get the credentials from the provided hostname
 fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
-    Some(OIDCProvider {
-        client_id: ClientId::new("minio".to_string()),
-        client_secret: ClientSecret::new("tetstestetstst".to_string()),
-        issuer_url: IssuerUrl::new("https://example.com/oauth2/openid/client_id".to_string())
-            .expect("Invalid issuer URL"),
-    })
+    get_oidc_providers()
+        .iter()
+        .find(|provider| {
+            provider
+                .issuer_url
+                .url()
+                .host_str()
+                .expect("Invalid issuer URL")
+                == hostname
+        })
+        .cloned()
 }
 
 fn get_auth_cookie(cookie_string: &str) -> String {
@@ -47,12 +74,11 @@ fn get_auth_cookie(cookie_string: &str) -> String {
     for cookie in Cookie::split_parse(cookie_string) {
         let cookie = cookie.unwrap();
 
-        if cookie.name() == "traefik_oidc" {
+        if cookie.name() == get_env("AUTH_COOKIE_NAME", Some("forward_auth")) {
             cookie_value = Some(cookie.value().to_string());
             break;
         }
     }
-
     cookie_value.unwrap_or_default()
 }
 
@@ -76,15 +102,16 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         }
     };
 
-    let issuer_url = oidc_provider.issuer_url;
-    let client_id = oidc_provider.client_id;
-    let client_secret = oidc_provider.client_secret;
+    let issuer_url = oidc_provider.issuer_url.url().to_string();
+    let client_id = oidc_provider.client_id.to_string();
 
     // Load this on start and NOT per request
-    let provider_metadata = tokio::task::spawn_blocking(|| {
-        let my_issuer_url =
-            IssuerUrl::new("https://example.com/oauth2/openid/clientId".to_string())
-                .expect("Invalid issuer URL");
+    let provider_metadata = tokio::task::spawn_blocking(move || {
+        let my_issuer_url = IssuerUrl::new(format!(
+            "https://{}/oauth2/openid/{}",
+            issuer_url, client_id
+        ))
+        .expect("Invalid issuer URL");
 
         CoreProviderMetadata::discover(&my_issuer_url, http_client).unwrap_or_else(|err| {
             handle_error(&err, "Failed to discover OpenID Provider");
@@ -95,12 +122,15 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
     .unwrap();
 
     // Set up the config for the GitLab OAuth2 process.
-    let client =
-        CoreClient::from_provider_metadata(provider_metadata, client_id, Some(client_secret))
-            .set_redirect_uri(
-                RedirectUrl::new("http://localhost:8080".to_string()) // TODO current host
-                    .expect("Invalid redirect URL"),
-            );
+    let client = CoreClient::from_provider_metadata(
+        provider_metadata,
+        oidc_provider.client_id,
+        Some(oidc_provider.client_secret),
+    )
+    .set_redirect_uri(
+        RedirectUrl::new("http://localhost:8080".to_string()) // TODO current host
+            .expect("Invalid redirect URL"),
+    );
 
     println!("4 Hallo Welt");
 
