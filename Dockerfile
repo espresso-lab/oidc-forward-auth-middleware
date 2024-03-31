@@ -1,20 +1,18 @@
-FROM lukemathwalker/cargo-chef:latest-rust-alpine as chef
+FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
 
 FROM chef AS planner
-COPY ./Cargo.toml ./Cargo.lock ./
-COPY ./src ./src
-RUN cargo chef prepare
-
-FROM chef AS builder
-COPY --from=planner /app/recipe.json .
-RUN cargo chef cook --release
 COPY . .
-RUN cargo build --release
-RUN mv ./target/release/oidc-forward-auth-middleware ./app
+RUN cargo chef prepare --recipe-path recipe.json
 
-FROM scratch AS runtime
+FROM chef AS builder 
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+COPY . .
+RUN cargo build --release --bin app
+
+FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-COPY --from=builder /app/app /usr/local/bin/
+COPY --from=builder /app/target/release/app /usr/local/bin
 EXPOSE 3000
 ENTRYPOINT ["/usr/local/bin/app"]
