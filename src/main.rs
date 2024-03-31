@@ -93,16 +93,51 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
 }
 
 #[handler]
-async fn status(res: &mut Response) {
-    res.status_code(StatusCode::OK).render(Text::Html("Ok. ✅"));
+async fn status_handler(res: &mut Response) {
+    res.status_code(StatusCode::OK).render(Text::Plain("OK"));
+}
+
+#[handler]
+async fn ok_handler(res: &mut Response) {
+    res.status_code(StatusCode::OK)
+        .render(Text::Plain("OK Handler"));
+}
+
+#[handler]
+async fn set_cookie(res: &mut Response) {
+    println!("Set Cookie");
+    //res.status_code(StatusCode::OK).render(Text::Html("Ok. ✅"));
+}
+
+#[handler]
+async fn check_cookie(res: &mut Response) {
+    println!("Check Cookie");
+    //res.status_code(StatusCode::N).render(Text::Html("Ok. ✅"));
+}
+
+#[handler]
+async fn check_params(res: &mut Response) {
+    println!("Check Params");
+    //res.status_code(StatusCode::OK).render(Text::Html("Ok. ✅"));
 }
 
 #[tokio::main]
 async fn main() {
     let router = Router::new()
-        .push(Router::with_path("/status").get(status))
-        .push(Router::with_path("/verify").get(forward_auth_handler));
+        .push(Router::with_path("/status").get(status_handler))
+        .push(
+            Router::with_path("/verify")
+                .push(Router::new().hoop(check_cookie).get(ok_handler))
+                .push(
+                    Router::new()
+                        .hoop(check_params)
+                        .hoop(set_cookie)
+                        .get(ok_handler),
+                )
+                .push(Router::new().get(forward_auth_handler)),
+        );
 
     let acceptor = TcpListener::new("0.0.0.0:3000").bind().await;
+    println!("Starting server on http://0.0.0.0:3000");
     Server::new(acceptor).serve(router).await;
 }
