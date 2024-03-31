@@ -7,5 +7,6 @@ edition = "2021"
 
 [dependencies]
 openidconnect = "3.5.0"
+querystring = "1.1.0"
 salvo = "0.66.2"
 tokio = "1.37.0"
