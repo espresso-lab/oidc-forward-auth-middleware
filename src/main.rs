@@ -7,6 +7,7 @@ use openidconnect::{
     AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
     OAuth2TokenResponse, RedirectUrl, Scope,
 };
+use querystring::querify;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use std::env;
@@ -147,17 +148,44 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
 
     // https://example.com/oauth_callback?state=eyJzdGF0ZSI6IlYxZFFUa0pYTUVjMFJVVTFNVmhNVURFek1VRlVWVE5RUnpwaVJWbHJVelpFVmxSTFJuZzVSV05LV0dsSlRscFNSRWRYWTNCS1REbExRbUZqTlVOalExZE5ZME56UFE9PSIsImlkcF9uYW1lIjoia2FuaWRtIn0%3D&code=gAAAAABmBzT5hPIYqxegNadrOyAUX3Wldm_ECT_OCztlX3PKJZ5OBKLPI5cPxgaDKhR9ci7DBvGHz6uWVWFXBeSysDL215eEpPNHFbS9-MGat9HjSRfwjeStdoEp46Y3YZ-i_GyszW1EhUgMO4S5uyRG8zty1JKnREqtAldhlcNqCdxXSZZw-4d7quAr_bPaywON1I6lEur7RMthEdM4Sf1_h_khWb08N-KFyWeVV50myHqHAAuBuxvDte416XTMod7VCabkq9iI6TGmYzTFHQwI6r7m-oBoh_zP90_E9vH9V-JxY8JqSkW1FLiMGaKDz1C_MAhPI3MwrBt-_lf1ncte0Z3UAn3I3w07BmMe2h3CWrz7IzV8kZ2D_vrAvlBezo_P9EgUCxvuP8KVYTGhULo6sNHGAMirfQ%3D%3D
 
-    let str_code = req.query::<String>("code");
-    let str_state = req.query::<String>("state");
+    // https://example.com/auth_callback?state=Us1y9ilun1ONXpjODHMNXQ&code=gAAAAABmCKNmTHhNQFxPDKDy9Z2Sc6An37k6SgI7ZpJjX7oel4IyrUXz1ULZfn3UqCCj5C2ctD2Vd7V75mxpKjUcRcf_U0-__KKsS-YKy2-zBZtgjp76Pt6hbtG-OKsP_naQ4_n5Qf-THUCFqBRMD-2X2FuEk5ZrxxrktMJryXdu0qPBFwtSE9s5s11iwJjP2r750G6z72MV7L-hx1VfKFDinecthcB3KVHM0Ha-BxintZvMv9yoNvmyyb_ZK4_Dmc_HdxXS4i-Bz-oc6y05zwvF8Y7pCTmHF91WB0ib5v6dmgeAVHFRI7ePMQ-k_8qE59qTFGHTuh72b5tZ82LWiWi9XOJFTwYKEi7hf-nkU--XheK5l_fWwz-x45Q6SQWQgCKgSfuMdalXBoB-hN2-FFgQF6BLjnLZEOR5qihpiCTBZuO4e0_xHFg%3D
+
+    // println!("X-Forwarded-Uri: {}", req.headers().get("X-Forwarded-Uri").expect("").to_str().unwrap_or(""));
+
+    let uri = req
+        .headers()
+        .get("X-Forwarded-Uri")
+        .expect("")
+        .to_str()
+        .unwrap_or("");
+    println!("URI: {}", uri);
+    let binding = uri
+        .replace("/auth_callback?", "")
+        .replace("auth_callback?", "");
+    let query_params = querify(&binding);
+
+    println!("{:?}", query_params);
+
+    let str_code = match query_params.iter().filter(|x| x.0 == "code").next() {
+        Some(str) => str.1,
+        None => "",
+    };
+
+    let str_state = match query_params.iter().filter(|x| x.0 == "state").next() {
+        Some(str) => str.1,
+        None => "",
+    };
 
     // Verify stuff
-    if !str_code.is_none() && !str_state.is_none() {
-        let code = AuthorizationCode::new(str_code.unwrap());
-        let state = CsrfToken::new(str_state.unwrap());
+    if !str_code.is_empty() && !str_state.is_empty() {
+        println!("Got some code and state yihaa");
 
-        println!("GitLab returned the following code:\n{}\n", code.secret());
+        let code = AuthorizationCode::new(str_code.to_string());
+        let state = CsrfToken::new(str_state.to_string());
+
+        println!("CODE:\n{}\n", code.secret());
         println!(
-            "GitLab returned the following state:\n{} (expected `{}`)\n",
+            "STATE:\n{} (expected `{}`)\n",
             state.secret(),
             csrf_state.secret()
         );
@@ -172,10 +200,10 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
             });
 
         println!(
-            "GitLab returned access token:\n{}\n",
+            "access token:\n{}\n",
             token_response.access_token().secret()
         );
-        println!("GitLab returned scopes: {:?}", token_response.scopes());
+        println!("SCOPES: {:?}", token_response.scopes());
 
         let id_token_verifier: CoreIdTokenVerifier = client.id_token_verifier();
         let id_token_claims: &CoreIdTokenClaims = token_response
@@ -187,9 +215,9 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
                 handle_error(&err, "Failed to verify ID token");
                 unreachable!();
             });
-        println!("GitLab returned ID token: {:?}\n", id_token_claims);
+        println!("ID token: {:?}\n", id_token_claims);
 
-        res.status_code(StatusCode::OK).render(Text::Plain("OK"));
+        res.status_code(StatusCode::NO_CONTENT);
     }
 
     res.render(Redirect::temporary(authorize_url.to_string()));

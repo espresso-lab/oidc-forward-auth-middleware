@@ -14,6 +14,7 @@ cookie = { version = "0.18", features = ["percent-encode"] }
 openidconnect = { version = "3" }
 url = { version = "2", features = ["serde"] }
 serde = {}
+querystring = {}
 
 [dev-dependencies]
 rustfmt = {}
