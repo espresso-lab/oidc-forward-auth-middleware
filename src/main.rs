@@ -1,26 +1,16 @@
-use openidconnect::core::{
-    CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
-};
+use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
+use openidconnect::url::Url;
 use openidconnect::{
     AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    NonceVerifier, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
+    PkceCodeChallenge, RedirectUrl, Scope, TokenResponse,
 };
-use querystring::querify;
 use salvo::http::cookie::Cookie;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
+use salvo::routing::PathState;
+use std::collections::HashMap;
 use std::env;
-
-fn handle_error<T: std::error::Error>(fail: &T, msg: &'static str) {
-    let mut err_msg = format!("ERROR: {}", msg);
-    let mut cur_fail: Option<&dyn std::error::Error> = Some(fail);
-    while let Some(cause) = cur_fail {
-        err_msg += &format!("\ncaused by: {}", cause);
-        cur_fail = cause.source();
-    }
-    println!("{}", err_msg);
-}
 
 #[derive(Clone)]
 struct OIDCProvider {
@@ -66,13 +56,24 @@ fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
 
 #[handler]
 async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
+    // get hostname
     let hostname = req
         .headers()
-        .get("X-Forwarded-Host")
-        .expect("X-Forwarded-Host needed")
+        .get("x-forwarded-host")
+        .expect("x-forwarded-host needed")
         .to_str()
         .unwrap_or("")
         .to_string();
+
+    // get proto
+    let proto = req
+        .headers()
+        .get("x-forwarded-proto")
+        .expect("x-forwarded-proto needed")
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+
     let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
         Some(val) => val,
         None => {
@@ -90,12 +91,14 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         Some(oidc_provider.client_secret),
     )
     .set_redirect_uri(
-        RedirectUrl::new(format!("https://{}/auth_callback", hostname.clone()).to_string())
-            .expect("Invalid redirect URL"),
+        RedirectUrl::new(
+            format!("{}://{}/auth_callback", proto.clone(), hostname.clone()).to_string(),
+        )
+        .expect("Invalid redirect URL"),
     );
 
     // Generate a PKCE challenge.
-    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let (_, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let (authorize_url, csrf_state, nonce) = client
         .authorize_url(
@@ -105,8 +108,11 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         )
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
-        .set_pkce_challenge(pkce_challenge)
+        // .set_pkce_challenge(pkce_challenge)
         .url();
+
+    // print auth url
+    println!("Authorize URL: {:?}", authorize_url);
 
     // Set Cookies
     res.add_cookie(Cookie::new(
@@ -120,41 +126,69 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
 }
 
 #[handler]
-async fn status_handler(res: &mut Response) {
+async fn ok_handler(res: &mut Response) {
     res.status_code(StatusCode::OK).render(Text::Plain("OK"));
 }
 
 #[handler]
-async fn ok_handler(res: &mut Response) {
-    res.status_code(StatusCode::OK)
-        .render(Text::Plain("OK Handler"));
-}
-
-#[handler]
-async fn set_cookie(res: &mut Response) {
+async fn set_cookie(_res: &mut Response) {
     println!("Set Cookie");
     //res.status_code(StatusCode::OK).render(Text::Html("Ok. ✅"));
 }
 
-#[handler]
-async fn check_cookie(req: &mut Request, res: &mut Response) {
+fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("forward_auth"));
     let cookie_value = req.cookie(cookie_name);
     if cookie_value.is_none() {
-        return res
-            .status_code(StatusCode::UNAUTHORIZED)
-            .render(Text::Plain("Unauthorized"));
+        return false;
     }
-    // TODO: Validate token (JWT)
+    return true;
+    // TODO: Check if cookie is valid.
 }
 
-#[handler]
-async fn check_params(req: &mut Request, res: &mut Response) {
-    println!("asd");
+fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
+    // get uri
+    let uri = req
+        .headers()
+        .get("x-forwarded-uri")
+        .expect("x-forwarded-uri needed")
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+
+    // get parameters
+    let hash_query: HashMap<String, String> =
+        Url::parse(format!("http://localhost{}", uri).as_str())
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+
+    // print all query parameters
+    for (key, value) in &hash_query {
+        println!("{}: {}", key, value);
+    }
+
+    let code = hash_query.get("code").unwrap_or(&"".to_string()).to_owned();
+
+    if code.is_empty() {
+        return false;
+    }
+
+    let csrf_state = req.cookie("csrf_state").unwrap().value();
+    let pkce_verifier = req.cookie("pkce_verifier").unwrap().value();
+    let nonce_verifier = req.cookie("nonce").unwrap().value();
+
+    println!("code: {:?}", code);
+    println!("csrf_state: {:?}", csrf_state);
+    println!("pkce_verifier: {:?}", pkce_verifier);
+    println!("nonce_verifier: {:?}", nonce_verifier);
+
+    // get hostname
     let hostname = req
         .headers()
-        .get("X-Forwarded-Host")
-        .expect("X-Forwarded-Host needed")
+        .get("x-forwarded-host")
+        .expect("x-forwarded-host needed")
         .to_str()
         .unwrap_or("")
         .to_string();
@@ -162,78 +196,44 @@ async fn check_params(req: &mut Request, res: &mut Response) {
     let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
         Some(val) => val,
         None => {
-            return res
-                .status_code(StatusCode::BAD_GATEWAY)
-                .render(Text::Plain("No OIDC provider known for hostname."))
+            return false;
         }
     };
 
     let provider_metadata =
         CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
+
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
         oidc_provider.client_id,
         Some(oidc_provider.client_secret),
     );
 
-    // let id_token_verifier: CoreIdTokenVerifier = client.id_token_verifier();
-    let pkce_verifier = PkceCodeVerifier::new(req.cookie("pkce_verifier").unwrap().to_string());
-    let csrf_state = CsrfToken::new(req.cookie("csrf_state").unwrap().to_string());
+    // let pkce_verifier = PkceCodeVerifier::new(pkce_verifier.to_owned());
+    // let csrf_state = CsrfToken::new(csrf_state);
 
-    println!("CSRF State: {:?}", csrf_state.secret());
-    println!("PKCE Verifier: {:?}", pkce_verifier.secret());
-    println!("Hostname: {:?}", hostname);
+    // Exchange the code with a token.
+    let token_response = client
+        .exchange_code(AuthorizationCode::new(code))
+        // .set_pkce_verifier(pkce_verifier)
+        .request(http_client)
+        .unwrap();
 
-    // // Exchange the code with a token.
-    // let token_response = client
-    //     .exchange_code(AuthorizationCode::new(
-    //         req.query("code").expect("Code not found").to_string(),
-    //     ))
-    //     .set_pkce_verifier(pkce_verifier)
-    //     .request(http_client)
-    //     .unwrap_or_else(|err| {
-    //         handle_error(&err, "Failed to contact token endpoint");
-    //         unreachable!();
-    //     });
+    let id_token = token_response.id_token().unwrap();
 
-    // println!(
-    //     "access token:\n{}\n",
-    //     token_response.access_token().secret()
-    // );
-    // println!("SCOPES: {:?}", token_response.scopes());
-
-    // let nonce = Nonce::new(
-    //     req.cookie("nonce")
-    //         .expect("Nonce cookie not found")
-    //         .value()
-    //         .to_string(),
-    // );
-
-    // let id_token_claims: &CoreIdTokenClaims = token_response
-    //     .extra_fields()
-    //     .id_token()
-    //     .expect("Server did not return an ID token")
-    //     .claims(&id_token_verifier, nonce_verifier)
-    //     .unwrap_or_else(|err| {
-    //         handle_error(&err, "Failed to verify ID token");
-    //         unreachable!();
-    //     });
-
-    // println!("ID token: {:?}\n", id_token_claims);
-
-    res.status_code(StatusCode::NO_CONTENT);
+    println!("ID token: {:?}\n", id_token);
+    return true;
 }
 
 #[tokio::main]
 async fn main() {
     let router = Router::new()
-        .push(Router::with_path("/status").get(status_handler))
+        .push(Router::with_path("/status").get(ok_handler))
         .push(
             Router::with_path("/verify")
-                .push(Router::new().hoop(check_cookie).get(ok_handler))
+                .push(Router::with_filter_fn(check_cookie).get(ok_handler))
                 .push(
-                    Router::new()
-                        .hoop(check_params)
+                    Router::with_filter_fn(check_params)
                         .hoop(set_cookie)
                         .get(ok_handler),
                 )
