@@ -2,11 +2,11 @@
 name = "oidc-forward-auth-middleware"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-openidconnect = "3.5.0"
-querystring = "1.1.0"
-salvo = "0.66.2"
-tokio = "1.37.0"
+openidconnect = { version = "3.5.0", features=["reqwest", "rustls-tls"], default-features = false }
+salvo = { version = "0.66.2", features=["cookie", "server", "quinn"], default-features = false }
+tokio = { version = "1.37.0", features=["macros"], default-features = false }

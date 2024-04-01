@@ -12,3 +12,9 @@ X-Forwarded-Host: localhost
 GET http://localhost:80/
 # Cookie: traefik_oidc=1234
 
+###
+GET http://localhost
+# Cookie: traefik_oidc=1
+X-Forwarded-Host: localhost
+X-Forwarded-Uri: /
+X-Forwarded-Proto: http
