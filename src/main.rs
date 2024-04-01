@@ -3,15 +3,13 @@ use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
 use openidconnect::{
     AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    PkceCodeChallenge, RedirectUrl, Scope, TokenResponse,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
-use salvo::http::cookie::Cookie;
-use salvo::http::StatusCode;
-use salvo::prelude::*;
-use salvo::routing::PathState;
+use salvo::{http::cookie::Cookie, http::StatusCode, prelude::*, routing::PathState};
 use std::collections::HashMap;
 use std::env;
 
+// Define a struct to hold OIDC provider information
 #[derive(Clone)]
 struct OIDCProvider {
     hostname: String,
@@ -20,10 +18,12 @@ struct OIDCProvider {
     issuer_url: IssuerUrl,
 }
 
+// Function to get environment variables
 fn get_env(key: &str, default: Option<&str>) -> String {
     env::var(key).unwrap_or_else(|_| default.unwrap_or("").to_owned())
 }
 
+// Function to get OIDC providers from environment variables
 fn get_oidc_providers() -> Vec<OIDCProvider> {
     let hostnames = get_env("AUTH_HOSTNAMES", None);
     let provider_urls = get_env("AUTH_PROVIDER_URLS", None);
@@ -47,6 +47,7 @@ fn get_oidc_providers() -> Vec<OIDCProvider> {
         .collect()
 }
 
+// Function to get OIDC provider for a given hostname
 fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
     get_oidc_providers()
         .iter()
@@ -54,9 +55,9 @@ fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
         .cloned()
 }
 
+// Handler for forwarding authentication
 #[handler]
 async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
-    // get hostname
     let hostname = req
         .headers()
         .get("x-forwarded-host")
@@ -64,8 +65,6 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         .to_str()
         .unwrap_or("")
         .to_string();
-
-    // get proto
     let proto = req
         .headers()
         .get("x-forwarded-proto")
@@ -97,8 +96,7 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         .expect("Invalid redirect URL"),
     );
 
-    // Generate a PKCE challenge.
-    let (_, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let (pkce_code_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let (authorize_url, csrf_state, nonce) = client
         .authorize_url(
@@ -108,13 +106,11 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         )
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
-        // .set_pkce_challenge(pkce_challenge)
+        .set_pkce_challenge(pkce_code_challenge)
         .url();
 
-    // print auth url
-    println!("Authorize URL: {:?}", authorize_url);
+    println!("Authorize URL: {:?}", authorize_url); // Print authorize URL
 
-    // Set Cookies
     res.add_cookie(Cookie::new(
         "pkce_verifier",
         pkce_verifier.secret().to_string(),
@@ -125,29 +121,20 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
     res.render(Redirect::temporary(authorize_url.to_string()));
 }
 
+// Handler for OK response
 #[handler]
 async fn ok_handler(res: &mut Response) {
     res.status_code(StatusCode::OK).render(Text::Plain("OK"));
 }
 
-#[handler]
-async fn set_cookie(_res: &mut Response) {
-    println!("Set Cookie");
-    //res.status_code(StatusCode::OK).render(Text::Html("Ok. ✅"));
-}
-
+// Function to check if a cookie exists
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("forward_auth"));
-    let cookie_value = req.cookie(cookie_name);
-    if cookie_value.is_none() {
-        return false;
-    }
-    return true;
-    // TODO: Check if cookie is valid.
+    req.cookie(cookie_name).is_some()
 }
 
+// Function to check parameters
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
-    // get uri
     let uri = req
         .headers()
         .get("x-forwarded-uri")
@@ -155,36 +142,22 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
         .to_str()
         .unwrap_or("")
         .to_string();
-
-    // get parameters
     let hash_query: HashMap<String, String> =
         Url::parse(format!("http://localhost{}", uri).as_str())
             .unwrap()
             .query_pairs()
             .into_owned()
             .collect();
-
-    // print all query parameters
-    for (key, value) in &hash_query {
-        println!("{}: {}", key, value);
-    }
-
     let code = hash_query.get("code").unwrap_or(&"".to_string()).to_owned();
 
     if code.is_empty() {
         return false;
     }
 
-    let csrf_state = req.cookie("csrf_state").unwrap().value();
-    let pkce_verifier = req.cookie("pkce_verifier").unwrap().value();
-    let nonce_verifier = req.cookie("nonce").unwrap().value();
+    // let csrf_state = req.cookie("csrf_state").unwrap().value();
+    let pkce_verifier = req.cookie("pkce_verifier").unwrap().value().to_owned();
+    // let nonce_verifier = req.cookie("nonce").unwrap().value();
 
-    println!("code: {:?}", code);
-    println!("csrf_state: {:?}", csrf_state);
-    println!("pkce_verifier: {:?}", pkce_verifier);
-    println!("nonce_verifier: {:?}", nonce_verifier);
-
-    // get hostname
     let hostname = req
         .headers()
         .get("x-forwarded-host")
@@ -202,27 +175,34 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
 
     let provider_metadata =
         CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
-
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
         oidc_provider.client_id,
         Some(oidc_provider.client_secret),
     );
 
-    // let pkce_verifier = PkceCodeVerifier::new(pkce_verifier.to_owned());
-    // let csrf_state = CsrfToken::new(csrf_state);
-
-    // Exchange the code with a token.
     let token_response = client
         .exchange_code(AuthorizationCode::new(code))
-        // .set_pkce_verifier(pkce_verifier)
+        .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
         .request(http_client)
         .unwrap();
 
     let id_token = token_response.id_token().unwrap();
 
-    println!("ID token: {:?}\n", id_token);
-    return true;
+    println!("ID Token: {:?}", id_token);
+
+    // let id_token = token_response.id_token().unwrap();
+
+    // println!("ID Token: {:?}", id_token);
+
+    true
+}
+
+#[handler]
+async fn set_cookie(res: &mut Response) {
+    // Set the final cookie here
+    res.add_cookie(Cookie::new("final_cookie", "final_value"));
+    println!("Final cookie set");
 }
 
 #[tokio::main]
@@ -241,6 +221,6 @@ async fn main() {
         );
 
     let acceptor = TcpListener::new("0.0.0.0:3000").bind().await;
-    println!("Starting server on http://0.0.0.0:3000");
+    println!("Starting server on http://0.0.0.0:3000"); // Print server start message
     Server::new(acceptor).serve(router).await;
 }
