@@ -6,6 +6,8 @@ use openidconnect::{
     PkceCodeChallenge, RedirectUrl, Scope, TokenResponse,
 };
 use salvo::http::cookie::Cookie;
+use salvo::http::header::HeaderValue;
+use salvo::http::header::{STRICT_TRANSPORT_SECURITY, X_FRAME_OPTIONS};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use salvo::routing::PathState;
@@ -223,9 +225,21 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     return true;
 }
 
+#[handler]
+async fn apply_security_headers(res: &mut Response) {
+    res.headers_mut()
+        .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+
+    res.headers_mut().insert(
+        STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static("max-age=2592000"),
+    );
+}
+
 #[tokio::main]
 async fn main() {
     let router = Router::new()
+        .hoop(apply_security_headers)
         .push(Router::with_path("/status").get(ok_handler))
         .push(
             Router::with_path("/verify")
