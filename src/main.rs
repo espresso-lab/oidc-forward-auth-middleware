@@ -3,7 +3,7 @@ use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
 use openidconnect::{
     AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
+    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
 use salvo::http::cookie::Cookie;
 use salvo::http::header::{STRICT_TRANSPORT_SECURITY, X_FRAME_OPTIONS};
@@ -139,6 +139,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
 
 // Function to check parameters
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
+    // depot: &mut Depot not working :/
     let uri = req
         .headers()
         .get("x-forwarded-uri")
@@ -192,8 +193,13 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
         .unwrap();
 
     let id_token = token_response.id_token().unwrap();
+    let access_token = token_response.access_token();
 
     println!("ID Token: {:?}", id_token);
+    println!("ACCESS Token: {:?}", access_token);
+
+    // depot.insert::<&str, &str>("id_token", access_token.secret());
+    // depot.insert::<&str, &str>("access_token", access_token.secret());
 
     // let id_token = token_response.id_token().unwrap();
 
@@ -202,10 +208,13 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     true
 }
 
+// Set the final cookie here
 #[handler]
-async fn set_cookie(res: &mut Response) {
-    // Set the final cookie here
-    res.add_cookie(Cookie::new("final_cookie", "final_value"));
+async fn set_cookie(res: &mut Response, depot: &mut Depot) {
+    let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("forward_auth"));
+    let access_token = depot.get::<&str>("access_token").copied().unwrap(); // TODO: Filter does not set depot :/
+    res.add_cookie(Cookie::new(cookie_name, access_token));
+
     println!("Final cookie set");
 }
 
