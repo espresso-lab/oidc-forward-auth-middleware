@@ -98,7 +98,7 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
     );
 
     // Generate a PKCE challenge.
-    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let (_, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let (authorize_url, csrf_state, nonce) = client
         .authorize_url(
@@ -164,10 +164,12 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
             .into_owned()
             .collect();
 
-    let code = hash_query
-        .get("code")
-        .unwrap_or(&"".to_string())
-        .to_string();
+    // print all query parameters
+    for (key, value) in &hash_query {
+        println!("{}: {}", key, value);
+    }
+
+    let code = hash_query.get("code").unwrap_or(&"".to_string()).to_owned();
 
     if code.is_empty() {
         return false;
