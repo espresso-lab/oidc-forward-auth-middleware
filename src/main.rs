@@ -218,23 +218,33 @@ async fn set_cookie(res: &mut Response, depot: &mut Depot) {
 // Enhance the security
 #[handler]
 async fn apply_security_headers(req: &mut Request, res: &mut Response) {
-    let hostname = req
-        .headers()
-        .get("x-forwarded-host")
-        .expect("x-forwarded-host needed")
-        .to_str()
-        .unwrap_or("")
-        .to_string();
+    // match  req
+    //     .headers()
+    //     .get("x-forwarded-host")
+    //     .expect("x-forwarded-host needed")
+    //     .to_str()
+    //     .unwrap_or("")
+    //     .to_string() {
+    //         Some(x) ||
+    //     }
+    // TODO
+    // let hostname = req
+    //     .headers()
+    //     .get("x-forwarded-host")
+    //     .expect("x-forwarded-host needed")
+    //     .to_str()
+    //     .unwrap_or("")
+    //     .to_string();
 
-    if hostname != "localhost" {
-        res.headers_mut()
-            .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    // if hostname != "localhost" {
+    //     res.headers_mut()
+    //         .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
 
-        res.headers_mut().insert(
-            STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static("max-age=2592000"),
-        );
-    }
+    //     res.headers_mut().insert(
+    //         STRICT_TRANSPORT_SECURITY,
+    //         HeaderValue::from_static("max-age=2592000"),
+    //     );
+    // }
 }
 
 #[tokio::main]
