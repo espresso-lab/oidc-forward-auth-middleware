@@ -47,6 +47,14 @@ fn get_query_param(querystring: &str, key: &str) -> String {
     hash_query.get(key).unwrap_or(&"".to_string()).to_owned()
 }
 
+// Function to get cookie from request
+fn get_cookie(req: &Request, key: &str) -> String {
+    req.cookie(key)
+        .unwrap_or(&Cookie::new(key, ""))
+        .value()
+        .to_string()
+}
+
 // Function to get OIDC providers from environment variables
 fn get_oidc_providers() -> Vec<OIDCProvider> {
     let hostnames = get_env("AUTH_HOSTNAMES", None);
@@ -142,7 +150,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
 // Function to check parameters
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     let uri = get_header(req, "x-forwarded-uri");
-    let csrf_state = req.cookie("csrf_state").unwrap().value();
+    let csrf_state = get_cookie(req, "csrf_state");
     let code = get_query_param(&uri, "code");
     let state = get_query_param(&uri, "state");
 
@@ -175,7 +183,7 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
     let hostname = get_header(req, "x-forwarded-host");
     let proto = get_header(req, "x-forwarded-proto");
     let code = get_query_param(&uri, "code");
-    let pkce_verifier = req.cookie("pkce_verifier").unwrap().value().to_owned();
+    let pkce_verifier = get_cookie(req, "pkce_verifier");
 
     if code.is_empty() {
         return res
