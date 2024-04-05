@@ -7,6 +7,6 @@ publish = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-openidconnect = { version = "3.5.0", features=["reqwest", "rustls-tls"], default-features = false }
-salvo = { version = "0.66.2", features=["cookie", "server", "quinn"], default-features = false }
-tokio = { version = "1.37.0", features=["macros"], default-features = false }
+openidconnect = { version = "3", features=["reqwest", "rustls-tls"], default-features = false }
+salvo = { version = "0", features=["cookie", "server", "quinn"], default-features = false }
+tokio = { version = "1", features=["macros"], default-features = false }
