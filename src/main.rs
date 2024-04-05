@@ -152,10 +152,32 @@ async fn ok_handler(res: &mut Response) {
 
 // Function to check if a cookie exists
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
+    let hostname = get_header(req, "x-forwarded-host");
+    let proto = get_header(req, "x-forwarded-proto");
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("forward_auth"));
-    req.cookie(cookie_name).is_some()
+    let cookie = get_cookie(req, &cookie_name);
+    if cookie.is_empty() {
+        return false;
+    }
+    // verify the cookie here
+    let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
+        Some(val) => val,
+        None => return false,
+    };
 
-    // TODO: Check if cookie is valid with provider key
+    let provider_metadata =
+        CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
+    let client = CoreClient::from_provider_metadata(
+        provider_metadata,
+        oidc_provider.client_id,
+        Some(oidc_provider.client_secret),
+    )
+    .set_redirect_uri(
+        RedirectUrl::new(format!("{}://{}/auth_callback", proto, hostname.clone()).to_string())
+            .expect("Invalid redirect URL"),
+    );
+    // verify the token here
+    true
 }
 
 // Function to check parameters
