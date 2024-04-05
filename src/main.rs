@@ -7,8 +7,8 @@ use openidconnect::{
 };
 use salvo::http::cookie::Cookie;
 use salvo::http::StatusCode;
-use salvo::prelude::*;
 use salvo::routing::PathState;
+use salvo::{prelude::*, proto};
 use std::collections::HashMap;
 use std::env;
 
@@ -126,11 +126,16 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         .set_pkce_challenge(pkce_challenge)
         .url();
 
-    res.add_cookie(Cookie::new("csrf_state", csrf_state.secret().to_string()));
-    res.add_cookie(Cookie::new(
-        "pkce_verifier",
-        pkce_verifier.secret().to_string(),
-    ));
+    res.add_cookie(
+        Cookie::build(("pkce_verifier", pkce_verifier.secret().to_string()))
+            .secure(proto == "https")
+            .build(),
+    );
+    res.add_cookie(
+        Cookie::build(("csrf_state", csrf_state.secret().to_string()))
+            .secure(proto == "https")
+            .build(),
+    );
 
     res.render(Redirect::temporary(authorize_url.to_string()));
 }
@@ -225,7 +230,11 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
     println!("Access Token: {:?}", access_token);
 
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("forward_auth"));
-    res.add_cookie(Cookie::new(cookie_name, access_token));
+    res.add_cookie(
+        Cookie::build((cookie_name, access_token))
+            .secure(proto == "https")
+            .build(),
+    );
     res.remove_cookie("csrf_state");
     res.remove_cookie("pkce_verifier");
 
