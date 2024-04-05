@@ -189,8 +189,8 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
         .request(http_client)
         .unwrap();
 
-    let id_token = token_response.id_token().unwrap();
-    let access_token = token_response.access_token();
+    let id_token = token_response.id_token().unwrap().to_string();
+    let access_token = token_response.access_token().secret();
 
     println!("ID Token: {:?}", id_token);
     println!("ACCESS Token: {:?}", access_token);
