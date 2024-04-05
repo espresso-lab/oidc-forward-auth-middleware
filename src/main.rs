@@ -69,13 +69,6 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         .to_str()
         .unwrap_or("")
         .to_string();
-    let proto = req
-        .headers()
-        .get("x-forwarded-proto")
-        .expect("x-forwarded-proto needed")
-        .to_str()
-        .unwrap_or("")
-        .to_string();
 
     let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
         Some(val) => val,
@@ -94,13 +87,11 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         Some(oidc_provider.client_secret),
     )
     .set_redirect_uri(
-        RedirectUrl::new(
-            format!("{}://{}/auth_callback", proto.clone(), hostname.clone()).to_string(),
-        )
-        .expect("Invalid redirect URL"),
+        RedirectUrl::new(format!("https://{}/auth_callback", hostname.clone()).to_string())
+            .expect("Invalid redirect URL"),
     );
 
-    let (pkce_code_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    // let (pkce_code_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let (authorize_url, csrf_state, nonce) = client
         .authorize_url(
@@ -110,15 +101,15 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
         )
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
-        .set_pkce_challenge(pkce_code_challenge)
+        //.set_pkce_challenge(pkce_code_challenge)
         .url();
 
     println!("Authorize URL: {:?}", authorize_url); // Print authorize URL
 
-    res.add_cookie(Cookie::new(
-        "pkce_verifier",
-        pkce_verifier.secret().to_string(),
-    ));
+    // res.add_cookie(Cookie::new(
+    //     "pkce_verifier",
+    //     pkce_verifier.secret().to_string(),
+    // ));
     res.add_cookie(Cookie::new("csrf_state", csrf_state.secret().to_string()));
     res.add_cookie(Cookie::new("nonce", nonce.secret().to_string()));
 
@@ -147,12 +138,14 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
         .to_str()
         .unwrap_or("")
         .to_string();
+
     let hash_query: HashMap<String, String> =
         Url::parse(format!("http://localhost{}", uri).as_str())
             .unwrap()
             .query_pairs()
             .into_owned()
             .collect();
+
     let code = hash_query.get("code").unwrap_or(&"".to_string()).to_owned();
 
     if code.is_empty() {
@@ -160,7 +153,7 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     }
 
     // let csrf_state = req.cookie("csrf_state").unwrap().value();
-    let pkce_verifier = req.cookie("pkce_verifier").unwrap().value().to_owned();
+    //let pkce_verifier = req.cookie("pkce_verifier").unwrap().value().to_owned();
     // let nonce_verifier = req.cookie("nonce").unwrap().value();
 
     let hostname = req
@@ -184,6 +177,10 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
         provider_metadata,
         oidc_provider.client_id,
         Some(oidc_provider.client_secret),
+    )
+    .set_redirect_uri(
+        RedirectUrl::new(format!("https://{}/auth_callback", hostname.clone()).to_string())
+            .expect("Invalid redirect URL"),
     );
 
     let token_response = client
@@ -192,8 +189,8 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
         .request(http_client)
         .unwrap();
 
-    let id_token = token_response.id_token().unwrap();
-    let access_token = token_response.access_token();
+    let id_token = token_response.id_token().unwrap().to_string();
+    let access_token = token_response.access_token().secret();
 
     println!("ID Token: {:?}", id_token);
     println!("ACCESS Token: {:?}", access_token);
@@ -220,14 +217,34 @@ async fn set_cookie(res: &mut Response, depot: &mut Depot) {
 
 // Enhance the security
 #[handler]
-async fn apply_security_headers(res: &mut Response) {
-    res.headers_mut()
-        .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+async fn apply_security_headers(req: &mut Request, res: &mut Response) {
+    // match  req
+    //     .headers()
+    //     .get("x-forwarded-host")
+    //     .expect("x-forwarded-host needed")
+    //     .to_str()
+    //     .unwrap_or("")
+    //     .to_string() {
+    //         Some(x) ||
+    //     }
+    // TODO
+    // let hostname = req
+    //     .headers()
+    //     .get("x-forwarded-host")
+    //     .expect("x-forwarded-host needed")
+    //     .to_str()
+    //     .unwrap_or("")
+    //     .to_string();
 
-    res.headers_mut().insert(
-        STRICT_TRANSPORT_SECURITY,
-        HeaderValue::from_static("max-age=2592000"),
-    );
+    // if hostname != "localhost" {
+    //     res.headers_mut()
+    //         .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+
+    //     res.headers_mut().insert(
+    //         STRICT_TRANSPORT_SECURITY,
+    //         HeaderValue::from_static("max-age=2592000"),
+    //     );
+    // }
 }
 
 #[tokio::main]
