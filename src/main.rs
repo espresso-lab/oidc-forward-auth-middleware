@@ -164,10 +164,62 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
         .unwrap_or("")
         .to_string();
 
+    if !match get_oidc_provider_for_hostname(hostname.clone()) {
+        Some(_val) => true,
+        None => {
+            return false;
+        }
+    } {
+        return false;
+    }
+
+    true
+}
+
+// Set the final cookie here
+#[handler]
+async fn set_cookie(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let uri = req
+        .headers()
+        .get("x-forwarded-uri")
+        .expect("x-forwarded-uri needed")
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+
+    let hash_query: HashMap<String, String> =
+        Url::parse(format!("http://localhost{}", uri).as_str())
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+
+    let code = hash_query.get("code").unwrap_or(&"".to_string()).to_owned();
+
+    if code.is_empty() {
+        return res
+            .status_code(StatusCode::BAD_GATEWAY)
+            .render(Text::Plain("No Token in response."));
+    }
+
+    // let csrf_state = req.cookie("csrf_state").unwrap().value();
+    //let pkce_verifier = req.cookie("pkce_verifier").unwrap().value().to_owned();
+    // let nonce_verifier = req.cookie("nonce").unwrap().value();
+
+    let hostname = req
+        .headers()
+        .get("x-forwarded-host")
+        .expect("x-forwarded-host needed")
+        .to_str()
+        .unwrap_or("")
+        .to_string();
+
     let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
         Some(val) => val,
         None => {
-            return false;
+            return res
+                .status_code(StatusCode::BAD_GATEWAY)
+                .render(Text::Plain("No OIDC provider known for hostname."));
         }
     };
 
@@ -189,27 +241,14 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
         .request(http_client)
         .unwrap();
 
-    let id_token = token_response.id_token().unwrap().to_string();
-    let access_token = token_response.access_token().secret();
+    let id_token = token_response.id_token().unwrap().clone().to_string();
+    let access_token = token_response.access_token().secret().to_string();
 
     println!("ID Token: {:?}", id_token);
-    println!("ACCESS Token: {:?}", access_token);
+    println!("Access Token: {:?}", access_token);
 
-    // depot.insert::<&str, &str>("id_token", access_token.secret());
-    // depot.insert::<&str, &str>("access_token", access_token.secret());
-
-    // let id_token = token_response.id_token().unwrap();
-
-    // println!("ID Token: {:?}", id_token);
-
-    true
-}
-
-// Set the final cookie here
-#[handler]
-async fn set_cookie(res: &mut Response, depot: &mut Depot) {
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("forward_auth"));
-    let access_token = depot.get::<&str>("access_token").copied().unwrap(); // TODO: Filter does not set depot :/
+    // let access_token = depot.get::<&str>("access_token").copied().unwrap(); // TODO: Filter does not set depot :/
     res.add_cookie(Cookie::new(cookie_name, access_token));
 
     println!("Final cookie set");
