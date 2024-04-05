@@ -15,10 +15,10 @@ use std::env;
 // Define a struct to hold OIDC provider information
 #[derive(Clone)]
 struct OIDCProvider {
-    hostname: String,
     client_id: ClientId,
     client_secret: ClientSecret,
     issuer_url: IssuerUrl,
+    scopes: Vec<String>,
 }
 
 // Function to get environment variables
@@ -56,36 +56,40 @@ fn get_cookie(req: &Request, key: &str) -> String {
 }
 
 // Function to get OIDC providers from environment variables
-fn get_oidc_providers() -> Vec<OIDCProvider> {
-    let hostnames = get_env("AUTH_HOSTNAMES", None);
-    let provider_urls = get_env("AUTH_PROVIDER_URLS", None);
-    let client_ids = get_env("AUTH_CLIENT_IDS", None);
-    let secrets = get_env("AUTH_SECRETS", None);
-    let (hostnames, urls, clients, secrets) = (
-        hostnames.split(",").collect::<Vec<_>>(),
-        provider_urls.split(",").collect::<Vec<_>>(),
-        client_ids.split(",").collect::<Vec<_>>(),
-        secrets.split(",").collect::<Vec<_>>(),
-    );
+fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
+    let mut i = 0u32;
+    let mut providers = HashMap::new();
 
-    urls.iter()
-        .enumerate()
-        .map(|(index, url)| OIDCProvider {
-            hostname: hostnames.get(index).unwrap().to_string().to_lowercase(),
-            client_id: ClientId::new(clients.get(index).unwrap().to_string()),
-            client_secret: ClientSecret::new(secrets.get(index).unwrap().to_string()),
-            issuer_url: IssuerUrl::new(url.to_string()).expect("Invalid issuer URL"),
-        })
-        .collect()
+    loop {
+        let hostname = get_env(&format!("OIDC_PROVIDER_{}_HOSTNAME", i), None);
+        let issuer_url = get_env(&format!("OIDC_PROVIDER_{}_ISSUER_URL", i), None);
+        let client_id = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_ID", i), None);
+        let client_secret = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_SECRET", i), None);
+        let scopes = get_env(&format!("OIDC_PROVIDER_{}_SCOPES", i), None);
+
+        if hostname.is_empty() || issuer_url.is_empty() || client_id.is_empty() || client_secret.is_empty() {
+            break;
+        }
+
+        providers.insert(hostname.to_lowercase(), {OIDCProvider {
+            client_id: ClientId::new(client_id),
+            client_secret: ClientSecret::new(client_secret),
+            issuer_url: IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
+            scopes: scopes.split(',').map(|s| s.to_string()).collect()
+        }});
+
+        i += 1;
+    }
+
+    providers
 }
 
 // Function to get OIDC provider for a given hostname
 fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
-    get_oidc_providers()
-        .iter()
-        .find(|provider| provider.hostname == hostname)
-        .cloned()
+    get_oidc_providers().get(&hostname.to_lowercase()).cloned()
 }
+
+// TODO: Save providers and provider metadata to a global variable and update it e.g. once per day
 
 // Handler for forwarding authentication
 #[handler]
@@ -121,8 +125,8 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
             CsrfToken::new_random,
             Nonce::new_random,
         )
-        .add_scope(Scope::new("email".to_string()))
-        .add_scope(Scope::new("profile".to_string()))
+        .add_scope(Scope::new("email".to_string())) // TODO: take from oidc_provider.scopes
+        .add_scope(Scope::new("profile".to_string())) // TODO: take from oidc_provider.scopes
         .set_pkce_challenge(pkce_challenge)
         .url();
 
@@ -150,6 +154,8 @@ async fn ok_handler(res: &mut Response) {
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("forward_auth"));
     req.cookie(cookie_name).is_some()
+
+    // TODO: Check if cookie is valid with provider key
 }
 
 // Function to check parameters
