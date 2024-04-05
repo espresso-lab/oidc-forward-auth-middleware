@@ -188,7 +188,7 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
 
     let token_response = client
         .exchange_code(AuthorizationCode::new(code))
-        .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
+        //.set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
         .request(http_client)
         .unwrap();
 
