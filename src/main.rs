@@ -252,6 +252,10 @@ async fn set_cookie(req: &mut Request, depot: &mut Depot, res: &mut Response) {
     res.add_cookie(Cookie::new(cookie_name, access_token));
 
     println!("Final cookie set");
+    res.render(Redirect::temporary(format!(
+        "https://{}/",
+        hostname.clone()
+    )));
 }
 
 // Enhance the security
