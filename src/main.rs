@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
@@ -7,10 +8,12 @@ use openidconnect::{
 };
 use salvo::http::cookie::Cookie;
 use salvo::http::StatusCode;
+use salvo::prelude::*;
 use salvo::routing::PathState;
-use salvo::{prelude::*, proto};
 use std::collections::HashMap;
 use std::env;
+
+static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
 
 // Define a struct to hold OIDC provider information
 #[derive(Clone)]
@@ -67,16 +70,22 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
         let client_secret = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_SECRET", i), None);
         let scopes = get_env(&format!("OIDC_PROVIDER_{}_SCOPES", i), None);
 
-        if hostname.is_empty() || issuer_url.is_empty() || client_id.is_empty() || client_secret.is_empty() {
+        if hostname.is_empty()
+            || issuer_url.is_empty()
+            || client_id.is_empty()
+            || client_secret.is_empty()
+        {
             break;
         }
 
-        providers.insert(hostname.to_lowercase(), {OIDCProvider {
-            client_id: ClientId::new(client_id),
-            client_secret: ClientSecret::new(client_secret),
-            issuer_url: IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
-            scopes: scopes.split(',').map(|s| s.to_string()).collect()
-        }});
+        providers.insert(hostname.to_lowercase(), {
+            OIDCProvider {
+                client_id: ClientId::new(client_id),
+                client_secret: ClientSecret::new(client_secret),
+                issuer_url: IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
+                scopes: scopes.split(',').map(|s| s.to_string()).collect(),
+            }
+        });
 
         i += 1;
     }
@@ -86,7 +95,7 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
 
 // Function to get OIDC provider for a given hostname
 fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
-    get_oidc_providers().get(&hostname.to_lowercase()).cloned()
+    PROVIDERS.get(&hostname.to_lowercase()).cloned()
 }
 
 // TODO: Save providers and provider metadata to a global variable and update it e.g. once per day
