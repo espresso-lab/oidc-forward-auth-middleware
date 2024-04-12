@@ -1215,6 +1215,7 @@ dependencies = [
 name = "oidc-forward-auth-middleware"
 version = "0.1.0"
 dependencies = [
+ "once_cell",
  "openidconnect",
  "salvo",
  "tokio",
