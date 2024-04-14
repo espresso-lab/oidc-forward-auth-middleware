@@ -4,8 +4,8 @@ use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
 use openidconnect::{
     AccessToken, AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
-    IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
-    TokenIntrospectionResponse, TokenResponse,
+    IntrospectionUrl, IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier,
+    RedirectUrl, Scope, TokenIntrospectionResponse, TokenResponse,
 };
 use salvo::http::cookie::Cookie;
 use salvo::http::StatusCode;
@@ -162,7 +162,7 @@ async fn ok_handler(res: &mut Response) {
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let hostname = get_header(req, "x-forwarded-host");
     let proto = get_header(req, "x-forwarded-proto");
-    let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("forward_auth"));
+    let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
     let cookie = get_cookie(req, &cookie_name);
     if cookie.is_empty() {
         return false;
@@ -182,6 +182,10 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     )
     .set_redirect_uri(
         RedirectUrl::new(format!("{}://{}/auth_callback", proto, hostname.clone()).to_string())
+            .expect("Invalid redirect URL"),
+    )
+    .set_introspection_uri(
+        IntrospectionUrl::new(oidc_provider.issuer_url.url().to_string())
             .expect("Invalid redirect URL"),
     );
 
@@ -272,7 +276,7 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
     println!("ID Token: {:?}", id_token);
     println!("Access Token: {:?}", access_token);
 
-    let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("forward_auth"));
+    let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
     res.add_cookie(
         Cookie::build((cookie_name, access_token))
             .secure(proto == "https")
@@ -289,7 +293,7 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
 
 // Enhance the security
 #[handler]
-async fn apply_security_headers(req: &mut Request, res: &mut Response) {
+async fn apply_security_headers(_req: &mut Request, _res: &mut Response) {
     // match  req
     //     .headers()
     //     .get("x-forwarded-host")
