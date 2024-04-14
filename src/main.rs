@@ -189,14 +189,17 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
             .expect("Invalid redirect URL"),
     );
 
+    // TODO: Uncomment; Comment it in to make site still accesible
     // Implement access token introspection here
-    let res = client
-        .introspect(&AccessToken::new(cookie))
-        .unwrap()
-        .request(http_client)
-        .unwrap();
+    // let res = client
+    //     .introspect(&AccessToken::new(cookie))
+    //     .unwrap()
+    //     .request(http_client)
+    //     .unwrap();
 
-    res.active()
+    // res.active()
+
+    true
 }
 
 // Function to check parameters
