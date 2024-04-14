@@ -3,8 +3,9 @@ use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
 use openidconnect::{
-    AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
+    AccessToken, AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
+    IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
+    TokenIntrospectionResponse, TokenResponse,
 };
 use salvo::http::cookie::Cookie;
 use salvo::http::StatusCode;
@@ -60,10 +61,9 @@ fn get_cookie(req: &Request, key: &str) -> String {
 
 // Function to get OIDC providers from environment variables
 fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
-    let mut i = 0u32;
     let mut providers = HashMap::new();
 
-    loop {
+    for i in 0u32.. {
         let hostname = get_env(&format!("OIDC_PROVIDER_{}_HOSTNAME", i), None);
         let issuer_url = get_env(&format!("OIDC_PROVIDER_{}_ISSUER_URL", i), None);
         let client_id = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_ID", i), None);
@@ -78,16 +78,15 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
             break;
         }
 
-        providers.insert(hostname.to_lowercase(), {
+        providers.insert(
+            hostname.to_lowercase(),
             OIDCProvider {
                 client_id: ClientId::new(client_id),
                 client_secret: ClientSecret::new(client_secret),
                 issuer_url: IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
-                scopes: scopes.split(',').map(|s| s.to_string()).collect(),
-            }
-        });
-
-        i += 1;
+                scopes: scopes.split(',').map(String::from).collect(),
+            },
+        );
     }
 
     providers
@@ -185,8 +184,15 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
         RedirectUrl::new(format!("{}://{}/auth_callback", proto, hostname.clone()).to_string())
             .expect("Invalid redirect URL"),
     );
-    // verify the token here
-    true
+
+    // Implement access token introspection here
+    let res = client
+        .introspect(&AccessToken::new(cookie))
+        .unwrap()
+        .request(http_client)
+        .unwrap();
+
+    res.active()
 }
 
 // Function to check parameters
