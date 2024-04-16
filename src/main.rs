@@ -1,20 +1,25 @@
+use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 use once_cell::sync::Lazy;
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
 use openidconnect::{
-    AccessToken, AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
-    IntrospectionUrl, IssuerUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenIntrospectionResponse, TokenResponse,
+    AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
+    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
 use salvo::http::cookie::Cookie;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use salvo::routing::PathState;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 
-static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
+// static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
+
+static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> =
+    Lazy::new(|| futures::executor::block_on(async { get_oidc_providers().await }));
 
 // Define a struct to hold OIDC provider information
 #[derive(Clone)]
@@ -23,6 +28,7 @@ struct OIDCProvider {
     client_secret: ClientSecret,
     issuer_url: IssuerUrl,
     scopes: Vec<String>,
+    jwks: JwkSet,
 }
 
 // Function to get environment variables
@@ -60,7 +66,7 @@ fn get_cookie(req: &Request, key: &str) -> String {
 }
 
 // Function to get OIDC providers from environment variables
-fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
+async fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
     let mut providers = HashMap::new();
 
     for i in 0u32.. {
@@ -78,6 +84,20 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
             break;
         }
 
+        let provider_metadata = CoreProviderMetadata::discover(
+            &IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
+            http_client,
+        )
+        .unwrap();
+
+        let jwks_string = reqwest::blocking::get(provider_metadata.jwks_uri().url().as_str())
+            .unwrap()
+            .text()
+            .ok()
+            .unwrap();
+
+        let jwks: JwkSet = serde_json::from_str(jwks_string.to_owned().as_str()).unwrap();
+
         providers.insert(
             hostname.to_lowercase(),
             OIDCProvider {
@@ -85,6 +105,7 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
                 client_secret: ClientSecret::new(client_secret),
                 issuer_url: IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
                 scopes: scopes.split(',').map(String::from).collect(),
+                jwks,
             },
         );
     }
@@ -158,13 +179,18 @@ async fn ok_handler(res: &mut Response) {
     res.status_code(StatusCode::OK).render(Text::Plain("OK"));
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    exp: usize,
+}
+
 // Function to check if a cookie exists
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let hostname = get_header(req, "x-forwarded-host");
-    let proto = get_header(req, "x-forwarded-proto");
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
-    let cookie = get_cookie(req, &cookie_name);
-    if cookie.is_empty() {
+    let token = get_cookie(req, &cookie_name);
+    if token.is_empty() {
         return false;
     }
     // verify the cookie here
@@ -173,33 +199,26 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
         None => return false,
     };
 
-    let provider_metadata =
-        CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
-    let client = CoreClient::from_provider_metadata(
-        provider_metadata,
-        oidc_provider.client_id,
-        Some(oidc_provider.client_secret),
-    )
-    .set_redirect_uri(
-        RedirectUrl::new(format!("{}://{}/auth_callback", proto, hostname.clone()).to_string())
-            .expect("Invalid redirect URL"),
-    )
-    .set_introspection_uri(
-        IntrospectionUrl::new(oidc_provider.issuer_url.url().to_string())
-            .expect("Invalid redirect URL"),
-    );
+    let header = decode_header(&token).unwrap();
+    let key_id = header.clone().kid.unwrap();
 
-    // TODO: Uncomment; Comment it in to make site still accesible
-    // Implement access token introspection here
-    // let res = client
-    //     .introspect(&AccessToken::new(cookie))
-    //     .unwrap()
-    //     .request(http_client)
-    //     .unwrap();
+    let jwks: JwkSet = oidc_provider.jwks;
+    let jwk = jwks
+        .keys
+        .iter()
+        .find(|k| {
+            k.common
+                .key_id
+                .clone()
+                .is_some_and(|s| s.eq(key_id.as_str()))
+        })
+        .unwrap();
 
-    // res.active()
+    let key = DecodingKey::from_jwk(&jwk).unwrap();
+    let validation = Validation::new(header.clone().alg);
+    let token = decode::<Claims>(&token, &key, &validation);
 
-    true
+    token.is_ok()
 }
 
 // Function to check parameters
