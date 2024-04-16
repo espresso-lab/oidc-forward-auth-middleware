@@ -13,8 +13,8 @@ GET http://localhost:80/
 # Cookie: traefik_oidc=1234
 
 ###
-GET http://localhost
+GET http://localhost:3000/verify
 # Cookie: traefik_oidc=1
 X-Forwarded-Host: localhost
-X-Forwarded-Uri: /
+X-Forwarded-Uri: https://localhost/test?hello=true
 X-Forwarded-Proto: http
