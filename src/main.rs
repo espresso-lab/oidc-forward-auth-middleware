@@ -9,7 +9,8 @@ use openidconnect::{
     OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
 use salvo::http::cookie::Cookie;
-use salvo::http::StatusCode;
+use salvo::http::header::{STRICT_TRANSPORT_SECURITY, X_FRAME_OPTIONS};
+use salvo::http::{HeaderValue, StatusCode};
 use salvo::prelude::*;
 use salvo::routing::PathState;
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,7 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
         )
         .unwrap();
 
+        // TODO: Update the keys on a regular basis
         let jwks_string = reqwest::blocking::get(provider_metadata.jwks_uri().url().as_str())
             .unwrap()
             .text()
@@ -106,7 +108,7 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
             },
         );
 
-        println!("Initialized OIDC provider for {}: {}", hostname, issuer_url);
+        println!("OIDC provider for {}: {} ", hostname, issuer_url);
     }
 
     println!("Initialized {} OIDC providers.", providers.len());
@@ -118,8 +120,6 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
 fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
     PROVIDERS.get(&hostname.to_lowercase()).cloned()
 }
-
-// TODO: Save providers and provider metadata to a global variable and update it e.g. once per day
 
 // Handler for forwarding authentication
 #[handler]
@@ -321,34 +321,24 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
 
 // Enhance the security
 #[handler]
-async fn apply_security_headers(_req: &mut Request, _res: &mut Response) {
-    // match  req
-    //     .headers()
-    //     .get("x-forwarded-host")
-    //     .expect("x-forwarded-host needed")
-    //     .to_str()
-    //     .unwrap_or("")
-    //     .to_string() {
-    //         Some(x) ||
-    //     }
-    // TODO
-    // let hostname = req
-    //     .headers()
-    //     .get("x-forwarded-host")
-    //     .expect("x-forwarded-host needed")
-    //     .to_str()
-    //     .unwrap_or("")
-    //     .to_string();
+async fn apply_security_headers(req: &mut Request, res: &mut Response) {
+    let hostname = req
+        .headers()
+        .get("x-forwarded-host")
+        .expect("x-forwarded-host needed")
+        .to_str()
+        .unwrap_or("")
+        .to_string();
 
-    // if hostname != "localhost" {
-    //     res.headers_mut()
-    //         .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    if hostname.ne("localhost") {
+        res.headers_mut().insert(
+            STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=2592000"),
+        );
+    }
 
-    //     res.headers_mut().insert(
-    //         STRICT_TRANSPORT_SECURITY,
-    //         HeaderValue::from_static("max-age=2592000"),
-    //     );
-    // }
+    res.headers_mut()
+        .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
 }
 
 #[tokio::main]
