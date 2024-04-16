@@ -16,10 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 
-// static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
-
-static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> =
-    Lazy::new(|| futures::executor::block_on(async { get_oidc_providers().await }));
+static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
 
 // Define a struct to hold OIDC provider information
 #[derive(Clone)]
@@ -66,7 +63,7 @@ fn get_cookie(req: &Request, key: &str) -> String {
 }
 
 // Function to get OIDC providers from environment variables
-async fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
+fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
     let mut providers = HashMap::new();
 
     for i in 0u32.. {
@@ -108,7 +105,11 @@ async fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
                 jwks,
             },
         );
+
+        println!("Initialized OIDC provider for {}: {}", hostname, issuer_url);
     }
+
+    println!("Initialized {} OIDC providers.", providers.len());
 
     providers
 }
