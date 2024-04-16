@@ -244,16 +244,8 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     }
 
     let hostname = get_header(req, "x-forwarded-host");
-    if !match get_oidc_provider_for_hostname(hostname.clone()) {
-        Some(_val) => true,
-        None => {
-            return false;
-        }
-    } {
-        return false;
-    }
 
-    true
+    get_oidc_provider_for_hostname(hostname.clone()).is_some()
 }
 
 // Set the final cookie here
