@@ -25,7 +25,6 @@ services:
       - .env
     ports:
       - 3000:3000
-
   whoami:
     image: "traefik/whoami"
     container_name: "whoami"
@@ -36,5 +35,5 @@ services:
       - "traefik.http.routers.whoami.middlewares=test-auth@docker"
       - "traefik.http.middlewares.test-auth.forwardauth.address=http://middleware:3000/verify"
       - "traefik.http.middlewares.test-auth.forwardauth.trustForwardHeader=true"
-      - "traefik.http.middlewares.test-auth.forwardauth.authResponseHeaders=Authorization,Set-Cookie,Location"
-      - "traefik.http.middlewares.test-auth.forwardauth.authRequestHeaders=Accept,Cookie,Authorization"
+      - "traefik.http.middlewares.test-auth.forwardauth.authResponseHeaders=Set-Cookie,Location"
+      - "traefik.http.middlewares.test-auth.forwardauth.authRequestHeaders=Accept,Cookie"
