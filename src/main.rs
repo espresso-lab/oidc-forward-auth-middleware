@@ -154,8 +154,12 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
             CsrfToken::new_random,
             Nonce::new_random,
         )
-        .add_scope(Scope::new("email".to_string())) // TODO: take from oidc_provider.scopes
-        .add_scope(Scope::new("profile".to_string())) // TODO: take from oidc_provider.scopes
+        .add_scopes(
+            oidc_provider
+                .scopes
+                .iter()
+                .map(|s| Scope::new(s.to_string())),
+        )
         .set_pkce_challenge(pkce_challenge)
         .url();
 
@@ -190,6 +194,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let hostname = get_header(req, "x-forwarded-host");
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
     let token = get_cookie(req, &cookie_name);
+
     if token.is_empty() {
         return false;
     }
