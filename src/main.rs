@@ -314,7 +314,11 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
 // Enhance the security
 #[handler]
 async fn apply_security_headers(req: &mut Request, res: &mut Response) {
-    let force_https = get_env("FORCE_HTTPS", None).to_lowercase().eq("true");
+    // print all headers
+    for (name, value) in req.headers().iter() {
+        println!("{}: {}", name, value.to_str().unwrap());
+    }
+    // let force_https = get_env("FORCE_HTTPS", None).to_lowercase().eq("true");
     // let uses_http = get_header(req, "x-forwarded-proto").eq("http");
 
     // if force_https {
@@ -332,8 +336,8 @@ async fn apply_security_headers(req: &mut Request, res: &mut Response) {
     //     }
     // }
 
-    res.headers_mut()
-        .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    // res.headers_mut()
+    //     .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
 }
 
 #[tokio::main]
