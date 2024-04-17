@@ -15,7 +15,7 @@ COPY . .
 RUN cargo build --release
 RUN mv ./target/release/oidc-forward-auth-middleware ./app
 
-FROM alpine AS runtime
+FROM rust:alpine AS runtime
 RUN apk add pkgconfig openssl-dev libc-dev
 ENV OPENSSL_DIR=/usr
 WORKDIR /app
