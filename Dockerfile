@@ -7,7 +7,7 @@ COPY src src
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-RUN apk add --no-cache libssl-dev libc6-dev
+RUN apk add --no-cache openssl
 COPY --from=planner /app/recipe.json .
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
