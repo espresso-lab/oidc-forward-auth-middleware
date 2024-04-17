@@ -315,22 +315,22 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
 #[handler]
 async fn apply_security_headers(req: &mut Request, res: &mut Response) {
     let force_https = get_env("FORCE_HTTPS", None).to_lowercase().eq("true");
-    let uses_http = get_header(req, "x-forwarded-proto").eq("http");
+    // let uses_http = get_header(req, "x-forwarded-proto").eq("http");
 
-    if force_https {
-        res.headers_mut().insert(
-            STRICT_TRANSPORT_SECURITY,
-            HeaderValue::from_static("max-age=2592000"),
-        );
+    // if force_https {
+    //     res.headers_mut().insert(
+    //         STRICT_TRANSPORT_SECURITY,
+    //         HeaderValue::from_static("max-age=2592000"),
+    //     );
 
-        if uses_http {
-            res.render(Redirect::temporary(format!(
-                "https://{}/{}",
-                get_header(req, "x-forwarded-host"),
-                get_header(req, "x-forwarded-uri")
-            )));
-        }
-    }
+    //     if uses_http {
+    //         res.render(Redirect::temporary(format!(
+    //             "https://{}/{}",
+    //             get_header(req, "x-forwarded-host"),
+    //             get_header(req, "x-forwarded-uri")
+    //         )));
+    //     }
+    // }
 
     res.headers_mut()
         .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
