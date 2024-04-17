@@ -16,6 +16,8 @@ RUN cargo build --release
 RUN mv ./target/release/oidc-forward-auth-middleware ./app
 
 FROM scratch AS runtime
+RUN apk add pkgconfig openssl-dev libc-dev
+ENV OPENSSL_DIR=/usr
 WORKDIR /app
 COPY --from=builder /app/app /usr/local/bin/
 EXPOSE 3000
