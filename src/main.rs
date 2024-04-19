@@ -226,9 +226,11 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
 
     println!("HEADER KID: {}", header.clone().kid.unwrap());
     println!("JWKS   KID: {}", jwk.clone().common.key_id.unwrap());
+    // println!("ALG    KID: {}", header.clone().alg.);
+    // println!("ALG ES256 : {}", jsonwebtoken::Algorithm::ES256.into());
 
     let key = DecodingKey::from_jwk(&jwk).unwrap();
-    let mut validation = Validation::new(header.clone().alg);
+    let mut validation = Validation::new(header.alg);
 
     let audience = vec![oidc_provider.client_id.as_str()];
     let issuer = vec![oidc_provider.issuer_url.as_str()];
