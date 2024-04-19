@@ -232,7 +232,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let key = DecodingKey::from_jwk(&jwk).unwrap();
     let validation = Validation::new(jsonwebtoken::Algorithm::ES256);
     let token = decode::<Claims>(&token, &key, &validation);
-d
+
     println!("Token is ok: {:?}", token.is_ok());
 
     token.is_ok()
