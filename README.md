@@ -1,17 +1,22 @@
-# OIDC Forward Auth Middleware
+# Docker Middleware for OIDC Authorization
 
-## Purpose
+![Docker Pulls](https://img.shields.io/docker/pulls/your-docker-username/your-docker-repo)
+![Docker Image Size (latest by date)](https://img.shields.io/docker/image-size/your-docker-username/your-docker-repo)
+![Docker Image Version (latest by date)](https://img.shields.io/docker/v/your-docker-username/your-docker-repo)
+![GitHub Workflow Status](https://img.shields.io/github/workflow/status/your-github-username/your-github-repo/your-workflow-name)
 
-### Problem
+This Docker container acts as a middleware that provides OpenID Connect (OIDC) authorization. It is designed to be used with the Traefik ingress controller in Kubernetes.
 
-- No easy solution for OIDC in traefik
-- Traefik enterprise is not open source
-- OIDC proxy requires many code changes in the applications manifest files
+## Features
 
-### Solution
+- OIDC Authorization
+- Integration with Traefik ingress controller
+- Easy to deploy in a Kubernetes environment
 
-Purpose of the project is to provide an easy and powerfull solution, to protect applications in a Kubernetes cluster with a Traefik ingress controller with an OIDC authentication mechanism without changing the application code.
+## Usage
 
-## Test
+To use this Docker container, pull the image from Docker Hub:
 
-Have a look at the verify.http file
+```bash
+docker pull your-docker-username/your-docker-repo:tag
+```
