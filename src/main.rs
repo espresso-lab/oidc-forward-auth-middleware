@@ -88,6 +88,18 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
         )
         .unwrap();
 
+        // print provider metadata url
+        println!(
+            "Provider Metadata URL: {}",
+            provider_metadata.jwks_uri().url().to_string()
+        );
+
+        // print provider metadata issuer
+        println!(
+            "Provider Metadata Issuer: {}",
+            provider_metadata.issuer().to_string()
+        );
+
         // TODO: Update the keys on a regular basis
         let jwks_string = reqwest::blocking::get(provider_metadata.jwks_uri().url().as_str())
             .unwrap()

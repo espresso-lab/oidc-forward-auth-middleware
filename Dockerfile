@@ -14,11 +14,9 @@
 # RUN cargo build --release --bin oidc-forward-auth-middleware
 
 FROM rust:1-bookworm  AS builder
-
 WORKDIR /app
 COPY . .
 RUN apt-get install pkg-config libssl-dev
-# RUN cargo install --path .
 RUN cargo build --release --bin main
 
 
