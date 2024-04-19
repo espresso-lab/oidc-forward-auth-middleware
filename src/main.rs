@@ -213,7 +213,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let key_id = header.clone().kid.unwrap();
 
     let jwks: JwkSet = oidc_provider.jwks;
-    let jwk = jwks
+    let jwk: &jsonwebtoken::jwk::Jwk = jwks
         .keys
         .iter()
         .find(|k| {
@@ -224,9 +224,8 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
         })
         .unwrap();
 
-    // println header.alg
-
-    println!("KID: {}", header.clone().kid.unwrap());
+    println!("HEADER KID: {}", header.clone().kid.unwrap());
+    println!("JWKS   KID: {}", jwk.clone().common.key_id.unwrap());
 
     let key = DecodingKey::from_jwk(&jwk).unwrap();
     let validation = Validation::new(header.clone().alg);
