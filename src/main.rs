@@ -205,7 +205,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let header = match decode_header(&token) {
         Ok(val) => val,
         Err(_) => {
-            println!("Token {} invalid", token);
+            println!("!!! Token invalid: {}", token);
             return false;
         }
     };
@@ -224,9 +224,15 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
         })
         .unwrap();
 
+    // println header.alg
+
+    println!("KID: {}", header.clone().kid.unwrap());
+
     let key = DecodingKey::from_jwk(&jwk).unwrap();
     let validation = Validation::new(header.clone().alg);
     let token = decode::<Claims>(&token, &key, &validation);
+
+    println!("Token is ok: {:?}", token.is_ok());
 
     token.is_ok()
 }
