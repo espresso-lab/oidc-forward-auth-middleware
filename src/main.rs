@@ -101,13 +101,10 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
         );
 
         // TODO: Update the keys on a regular basis
-        let jwks_string = reqwest::blocking::get(provider_metadata.jwks_uri().url().as_str())
+        let jwks: JwkSet = reqwest::blocking::get(&provider_metadata.jwks_uri().url().to_string())
             .unwrap()
-            .text()
-            .ok()
+            .json()
             .unwrap();
-
-        let jwks: JwkSet = serde_json::from_str(jwks_string.to_owned().as_str()).unwrap();
 
         providers.insert(
             hostname.to_lowercase(),
