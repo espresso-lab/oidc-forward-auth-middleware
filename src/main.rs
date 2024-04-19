@@ -228,7 +228,14 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     println!("JWKS   KID: {}", jwk.clone().common.key_id.unwrap());
 
     let key = DecodingKey::from_jwk(&jwk).unwrap();
-    let validation = Validation::new(header.clone().alg);
+    let mut validation = Validation::new(header.clone().alg);
+
+    let audience = vec![oidc_provider.client_id.as_str()];
+    let issuer = vec![oidc_provider.issuer_url.as_str()];
+
+    validation.set_audience(&audience);
+    validation.set_issuer(&issuer);
+
     let token = decode::<Claims>(&token, &key, &validation);
 
     println!("Token is ok: {:?}", token.is_ok());
