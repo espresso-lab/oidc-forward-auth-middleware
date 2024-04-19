@@ -311,7 +311,7 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
 
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
     res.add_cookie(
-        Cookie::build((cookie_name, access_token))
+        Cookie::build((cookie_name, id_token))
             .secure(proto == "https")
             .build(),
     );
