@@ -20,7 +20,7 @@ RUN apt-get install pkg-config libssl-dev
 RUN cargo build --release --bin main
 
 
-FROM debian:bookworm AS runtime
+FROM debian:bookworm-slim AS runtime
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /app/target/release/main /app
 EXPOSE 3000
