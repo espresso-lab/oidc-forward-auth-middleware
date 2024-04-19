@@ -1,21 +1,30 @@
-FROM lukemathwalker/cargo-chef:latest-rust-alpine AS chef
+# FROM lukemathwalker/cargo-chef:latest-rust-alpine AS chef
+# WORKDIR /app
+
+# FROM chef AS planner
+# COPY . .
+# RUN cargo chef prepare --recipe-path recipe.json
+
+# FROM chef AS builder
+# RUN apk add openssl openssl-dev openssl-libs-static pkgconfig
+# ENV OPENSSL_DIR=/usr
+# COPY --from=planner /app/recipe.json .
+# RUN cargo chef cook --release --recipe-path recipe.json
+# COPY . .
+# RUN cargo build --release --bin oidc-forward-auth-middleware
+
+FROM rust:1-bookworm  AS builder
+
 WORKDIR /app
-
-FROM chef AS planner
-COPY Cargo* .
-COPY src src
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef AS builder
-RUN apk add openssl-dev
-ENV OPENSSL_DIR=/usr
-COPY --from=planner /app/recipe.json .
-RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN rustup target add aarch64-unknown-linux-musl
-RUN cargo build --release --target aarch64-unknown-linux-musl
+RUN apt-get install pkg-config libssl-dev
+# RUN cargo install --path .
+RUN cargo build --release --bin main
 
-FROM scratch AS runtime
-COPY --from=builder /app/target/aarch64-unknown-linux-musl/release/oidc-forward-auth-middleware /usr/local/bin/app
+
+FROM debian:bookworm AS runtime
+# # RUN apt-get update && apt install -y openssl
+WORKDIR /app
+COPY --from=builder /app/target/release/main /app/
 EXPOSE 3000
-ENTRYPOINT ["/usr/local/bin/app"]
+ENTRYPOINT ["/app/main"]

@@ -355,6 +355,9 @@ async fn main() {
                 )
                 .push(Router::new().goal(forward_auth_handler)),
         );
+
+    print!("Starting server on port http://0.0.0.0:3000");
+
     let acceptor = TcpListener::new("0.0.0.0:3000").bind().await;
     Server::new(acceptor).serve(router).await;
 }
