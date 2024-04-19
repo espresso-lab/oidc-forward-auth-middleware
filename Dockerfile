@@ -23,8 +23,6 @@ RUN cargo build --release --bin main
 
 
 FROM debian:bookworm AS runtime
-# # RUN apt-get update && apt install -y openssl
-WORKDIR /app
-COPY --from=builder /app/target/release/main /app/
+COPY --from=builder /app/target/release/main /app
 EXPOSE 3000
-ENTRYPOINT ["/app/main"]
+ENTRYPOINT ["/app"]
