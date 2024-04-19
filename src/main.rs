@@ -304,6 +304,10 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
 
     println!("Access Token: {:?}", access_token);
     println!("ID Token: {:?}", token_response.id_token().clone());
+    println!(
+        "ID Token response: {:?}",
+        token_response.extra_fields().id_token()
+    );
 
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
     res.add_cookie(
