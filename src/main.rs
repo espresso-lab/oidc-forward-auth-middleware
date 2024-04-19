@@ -202,7 +202,14 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
         None => return false,
     };
 
-    let header = decode_header(&token).unwrap();
+    let header = match decode_header(&token) {
+        Ok(val) => val,
+        Err(_) => {
+            println!("Token {} invalid", token);
+            return false;
+        }
+    };
+
     let key_id = header.clone().kid.unwrap();
 
     let jwks: JwkSet = oidc_provider.jwks;
@@ -290,7 +297,11 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
     let id_token = token_response.id_token().unwrap().clone().to_string();
     let access_token = token_response.access_token().secret().to_string();
 
-    println!("ID Token: {:?}", id_token);
+    println!(
+        "Hello returned access token:\n{}\n",
+        token_response.access_token().secret()
+    );
+
     println!("Access Token: {:?}", access_token);
 
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
