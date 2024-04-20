@@ -7,3 +7,5 @@
 /verify.http
 /.env
 /.env.sample
+/.github
+/.idea
