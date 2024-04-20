@@ -19,7 +19,6 @@ RUN cargo build --release --target $(cat /.platform) --bin main
 RUN mv ./target/$(cat /.platform)/release/main ./main
 
 FROM scratch AS runtime
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /app/main /app
 EXPOSE 3000
 CMD ["/app"]
