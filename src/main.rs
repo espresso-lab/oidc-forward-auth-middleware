@@ -80,7 +80,12 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
         )
         .unwrap();
 
-        let jwks: JwkSet = reqwest::blocking::get(&provider_metadata.jwks_uri().url().to_string())
+        let jwks: JwkSet = reqwest::blocking::Client::builder()
+            .use_rustls_tls()
+            .build()
+            .unwrap()
+            .get(&provider_metadata.jwks_uri().url().to_string())
+            .send()
             .unwrap()
             .json()
             .unwrap();
