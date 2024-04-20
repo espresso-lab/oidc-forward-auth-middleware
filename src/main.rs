@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::env;
+
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 use once_cell::sync::Lazy;
@@ -14,8 +17,6 @@ use salvo::prelude::{handler, Redirect, Request, Response, Router, Server, TcpLi
 use salvo::routing::PathState;
 use salvo::Listener;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::env;
 
 static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
 
