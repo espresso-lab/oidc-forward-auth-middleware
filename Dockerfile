@@ -8,7 +8,6 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-ENV RUSTFLAGS='-C target-feature=-crt-static'
 ARG TARGETARCH
 COPY --from=planner /app/recipe.json recipe.json
 COPY platform.sh .
@@ -20,7 +19,6 @@ RUN cargo build --release --target $(cat /.platform) --bin main
 RUN mv ./target/$(cat /.platform)/release/main ./main
 
 FROM scratch AS runtime
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /app/main /app
 EXPOSE 3000
 CMD ["/app"]
