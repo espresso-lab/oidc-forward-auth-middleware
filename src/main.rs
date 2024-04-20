@@ -297,10 +297,7 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
     res.remove_cookie("csrf_state");
     res.remove_cookie("pkce_verifier");
 
-    res.render(Redirect::temporary(format!(
-        "https://{}/",
-        hostname.clone()
-    )));
+    res.render(Redirect::temporary(format!("{}://{}/", proto, hostname)));
 }
 
 #[tokio::main]
