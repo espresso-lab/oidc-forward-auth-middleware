@@ -6,20 +6,19 @@ use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
 use openidconnect::{
     AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
 use salvo::http::cookie::Cookie;
-use salvo::http::header::{STRICT_TRANSPORT_SECURITY, X_FRAME_OPTIONS};
-use salvo::http::{HeaderValue, StatusCode};
-use salvo::prelude::*;
+use salvo::http::StatusCode;
+use salvo::prelude::{handler, Redirect, Request, Response, Router, Server, TcpListener, Text};
 use salvo::routing::PathState;
+use salvo::Listener;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 
 static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
 
-// Define a struct to hold OIDC provider information
 #[derive(Clone)]
 struct OIDCProvider {
     client_id: ClientId,
@@ -29,25 +28,21 @@ struct OIDCProvider {
     jwks: JwkSet,
 }
 
-// Function to get environment variables
 fn get_env(key: &str, default: Option<&str>) -> String {
     env::var(key).unwrap_or_else(|_| default.unwrap_or("").to_owned())
 }
 
-// Function to get headers from request
 fn get_header(req: &Request, key: &str) -> String {
     req.headers()
         .get(key)
-        .expect(format!("{} needed", key).as_str())
-        .to_str()
+        .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_string()
 }
 
-// Function to get query parameters from query string
 fn get_query_param(querystring: &str, key: &str) -> String {
     let hash_query: HashMap<String, String> =
-        Url::parse(format!("https://whatever{}", querystring).as_str())
+        Url::parse(&format!("https://whatever{}", querystring))
             .unwrap()
             .query_pairs()
             .into_owned()
@@ -55,15 +50,12 @@ fn get_query_param(querystring: &str, key: &str) -> String {
     hash_query.get(key).unwrap_or(&"".to_string()).to_owned()
 }
 
-// Function to get cookie from request
 fn get_cookie(req: &Request, key: &str) -> String {
     req.cookie(key)
-        .unwrap_or(&Cookie::new(key, ""))
-        .value()
-        .to_string()
+        .map(|cookie| cookie.value().to_string())
+        .unwrap_or_else(|| "".to_string())
 }
 
-// Function to get OIDC providers from environment variables
 fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
     let mut providers = HashMap::new();
 
@@ -88,7 +80,6 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
         )
         .unwrap();
 
-        // TODO: Update the keys on a regular basis
         let jwks: JwkSet = reqwest::blocking::get(&provider_metadata.jwks_uri().url().to_string())
             .unwrap()
             .json()
@@ -104,21 +95,15 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
                 jwks,
             },
         );
-
-        println!("OIDC provider for {}: {} ", hostname, issuer_url);
     }
-
-    println!("Initialized {} OIDC providers.", providers.len());
 
     providers
 }
 
-// Function to get OIDC provider for a given hostname
 fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
     PROVIDERS.get(&hostname.to_lowercase()).cloned()
 }
 
-// Handler for forwarding authentication
 #[handler]
 async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
     let hostname = get_header(req, "x-forwarded-host");
@@ -175,7 +160,6 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
     res.render(Redirect::temporary(authorize_url.to_string()));
 }
 
-// Handler for OK response
 #[handler]
 async fn ok_handler(res: &mut Response) {
     res.status_code(StatusCode::OK).render(Text::Plain("OK"));
@@ -187,7 +171,6 @@ struct Claims {
     exp: usize,
 }
 
-// Function to check if a cookie exists
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let hostname = get_header(req, "x-forwarded-host");
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
@@ -196,7 +179,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     if token.is_empty() {
         return false;
     }
-    // verify the cookie here
+
     let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
         Some(val) => val,
         None => return false,
@@ -205,12 +188,11 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let header = match decode_header(&token) {
         Ok(val) => val,
         Err(_) => {
-            println!("!!! Token invalid: {}", token);
             return false;
         }
     };
 
-    let key_id = header.clone().kid.unwrap();
+    let key_id = header.kid.unwrap();
 
     let jwks: JwkSet = oidc_provider.jwks;
     let jwk: &jsonwebtoken::jwk::Jwk = jwks
@@ -224,11 +206,6 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
         })
         .unwrap();
 
-    println!("HEADER KID: {}", header.clone().kid.unwrap());
-    println!("JWKS   KID: {}", jwk.clone().common.key_id.unwrap());
-    // println!("ALG    KID: {}", header.clone().alg.);
-    // println!("ALG ES256 : {}", jsonwebtoken::Algorithm::ES256.into());
-
     let key = DecodingKey::from_jwk(&jwk).unwrap();
     let mut validation = Validation::new(header.alg);
 
@@ -240,12 +217,9 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
 
     let token = decode::<Claims>(&token, &key, &validation);
 
-    println!("Token is ok: {:?}", token.is_ok());
-
     token.is_ok()
 }
 
-// Function to check parameters
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     let uri = get_header(req, "x-forwarded-uri");
     let csrf_state = get_cookie(req, "csrf_state");
@@ -266,7 +240,6 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     get_oidc_provider_for_hostname(hostname.clone()).is_some()
 }
 
-// Set the final cookie here
 #[handler]
 async fn set_cookie(req: &mut Request, res: &mut Response) {
     let uri = get_header(req, "x-forwarded-uri");
@@ -309,19 +282,6 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
         .unwrap();
 
     let id_token = token_response.id_token().unwrap().clone().to_string();
-    let access_token = token_response.access_token().secret().to_string();
-
-    println!(
-        "Hello returned access token:\n{}\n",
-        token_response.access_token().secret()
-    );
-
-    println!("Access Token: {:?}", access_token);
-    println!("ID Token: {:?}", token_response.id_token().clone());
-    println!(
-        "ID Token response: {:?}",
-        token_response.extra_fields().id_token()
-    );
 
     let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
     res.add_cookie(
@@ -338,39 +298,9 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
     )));
 }
 
-// Enhance the security
-#[handler]
-async fn apply_security_headers(req: &mut Request, res: &mut Response) {
-    // print all headers
-    for (name, value) in req.headers().iter() {
-        println!("{}: {}", name, value.to_str().unwrap());
-    }
-    // let force_https = get_env("FORCE_HTTPS", None).to_lowercase().eq("true");
-    // let uses_http = get_header(req, "x-forwarded-proto").eq("http");
-
-    // if force_https {
-    //     res.headers_mut().insert(
-    //         STRICT_TRANSPORT_SECURITY,
-    //         HeaderValue::from_static("max-age=2592000"),
-    //     );
-
-    //     if uses_http {
-    //         res.render(Redirect::temporary(format!(
-    //             "https://{}/{}",
-    //             get_header(req, "x-forwarded-host"),
-    //             get_header(req, "x-forwarded-uri")
-    //         )));
-    //     }
-    // }
-
-    // res.headers_mut()
-    //     .insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-}
-
 #[tokio::main]
 async fn main() {
     let router = Router::new()
-        .hoop(apply_security_headers)
         .push(Router::with_path("/status").get(ok_handler))
         .push(
             Router::with_path("/verify")
@@ -382,8 +312,6 @@ async fn main() {
                 )
                 .push(Router::new().goal(forward_auth_handler)),
         );
-
-    print!("Starting server on port http://0.0.0.0:3000");
 
     let acceptor = TcpListener::new("0.0.0.0:3000").bind().await;
     Server::new(acceptor).serve(router).await;
