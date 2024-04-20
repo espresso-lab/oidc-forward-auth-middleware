@@ -2202,6 +2202,7 @@ dependencies = [
  "mime-infer",
  "multer",
  "multimap",
+ "native-tls",
  "nix",
  "once_cell",
  "parking_lot",
@@ -2221,6 +2222,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio 1.37.0",
+ "tokio-native-tls",
  "tokio-rustls 0.24.1",
  "tokio-rustls 0.25.0",
  "tokio-util 0.7.10",
@@ -2695,6 +2697,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.57",
+]
+
+[[package]]
+name = "tokio-native-tls"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
+dependencies = [
+ "native-tls",
+ "tokio 1.37.0",
 ]
 
 [[package]]
