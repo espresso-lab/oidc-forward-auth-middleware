@@ -90,19 +90,26 @@ whoami:
 
 ### Environment variables
 
+#### General setting
+
+| Environment variable      | Type    | Description                                                                              |
+| ------------------------- | ------- | ---------------------------------------------------------------------------------------- |
+| FORWARD_AUTH_COOKIE       | String  | Name of the browser cookie that stores the JWT session.                                  |
+| RUST_LOG                  | String  | info, debug, error, warning                                                              |
+| DISABLE_ENHANCED_SECURITY | Boolean | Default: false. Sets various security HTTP headers and redirects http requests to https. |
+
+#### Per OIDC provider
+
 Use `OIDC_PROVIDER_0_*` for the first provider, `OIDC_PROVIDER_1_*` for the second one and so on.
 
-| Environment variable          | Type    | Description                                                                              |
-| ----------------------------- | ------- | ---------------------------------------------------------------------------------------- |
-| FORWARD_AUTH_COOKIE           | String  | Name of the browser cookie that stores the JWT session.                                  |
-| OIDC_PROVIDER_0_HOSTNAME      | String  | Name of the hostname (traefik ingress host)                                              |
-| OIDC_PROVIDER_0_ISSUER_URL    | String  | OIDC issuer url                                                                          |
-| OIDC_PROVIDER_0_CLIENT_ID     | String  | OIDC client id                                                                           |
-| OIDC_PROVIDER_0_CLIENT_SECRET | String  | OIDC client secret                                                                       |
-| OIDC_PROVIDER_0_SCOPES        | String  | OIDC scopes (openid, email, ...)                                                         |
-| OIDC_PROVIDER_0_AUDIENCE      | String  | OIDC audience                                                                            |
-| RUST_LOG                      | String  | info, debug, error, warning                                                              |
-| DISABLE_ENHANCED_SECURITY     | Boolean | Default: false. Sets various security HTTP headers and redirects http requests to https. |
+| Environment variable          | Type   | Description                                 |
+| ----------------------------- | ------ | ------------------------------------------- |
+| OIDC_PROVIDER_0_HOSTNAME      | String | Name of the hostname (traefik ingress host) |
+| OIDC_PROVIDER_0_ISSUER_URL    | String | OIDC issuer url                             |
+| OIDC_PROVIDER_0_CLIENT_ID     | String | OIDC client id                              |
+| OIDC_PROVIDER_0_CLIENT_SECRET | String | OIDC client secret                          |
+| OIDC_PROVIDER_0_SCOPES        | String | OIDC scopes (openid, email, ...)            |
+| OIDC_PROVIDER_0_AUDIENCE      | String | OIDC audience                               |
 
 ## License
 
