@@ -18,3 +18,10 @@ GET http://localhost:3000/verify
 X-Forwarded-Host: localhost
 X-Forwarded-Uri: https://localhost/test?hello=true
 X-Forwarded-Proto: http
+
+###
+GET http://localhost:3000/status
+# Cookie: traefik_oidc=1
+X-Forwarded-Host: localhost
+X-Forwarded-Uri: https://localhost/test?hello=true
+X-Forwarded-Proto: http
