@@ -12,7 +12,11 @@ use openidconnect::{
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
 use salvo::http::cookie::Cookie;
-use salvo::http::StatusCode;
+use salvo::http::header::{
+    REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
+    X_XSS_PROTECTION,
+};
+use salvo::http::{HeaderValue, StatusCode};
 use salvo::logging::Logger;
 use salvo::prelude::{handler, Redirect, Request, Response, Router, Server, TcpListener, Text};
 use salvo::routing::PathState;
@@ -335,11 +339,64 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
     res.render(Redirect::temporary(format!("{}://{}/", proto, hostname)));
 }
 
+static ENHANCED_SECURITY_ENABLED: Lazy<bool> =
+    Lazy::new(|| match env::var("DISABLE_ENHANCED_SECURITY") {
+        Ok(val) => {
+            if val.to_lowercase().eq("true") || val.eq("1") {
+                info!("Enhanced security is disabled. Skipping headers.");
+                false
+            } else {
+                info!("Enhanced security is enabled.");
+                true
+            }
+        }
+        Err(_) => {
+            info!("Enhanced security is enabled.");
+            true
+        }
+    });
+
+#[handler]
+async fn apply_security_headers(req: &mut Request, res: &mut Response) {
+    if false == ENHANCED_SECURITY_ENABLED.to_owned() {
+        return;
+    }
+
+    res.headers_mut()
+        .insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
+
+    res.headers_mut().insert(
+        STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
+    );
+    res.headers_mut()
+        .insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("noopen"));
+
+    res.headers_mut()
+        .insert(X_XSS_PROTECTION, HeaderValue::from_static("1; mode=block"));
+
+    res.headers_mut().insert(
+        REFERRER_POLICY,
+        HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+
+    if get_header(req, "x-forwarded-proto").eq("http") {
+        debug!("Redirecting client to HTTPS.");
+
+        res.render(Redirect::temporary(format!(
+            "https://{}/{}",
+            get_header(req, "x-forwarded-host"),
+            get_header(req, "x-forwarded-uri")
+        )));
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
     let router = Router::new()
+        .hoop(apply_security_headers)
         .push(Router::with_path("/status").get(ok_handler))
         .push(
             Router::with_path("/verify")
