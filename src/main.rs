@@ -155,11 +155,13 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
     res.add_cookie(
         Cookie::build(("pkce_verifier", pkce_verifier.secret().to_string()))
             .secure(proto == "https")
+            .http_only(true)
             .build(),
     );
     res.add_cookie(
         Cookie::build(("csrf_state", csrf_state.secret().to_string()))
             .secure(proto == "https")
+            .http_only(true)
             .build(),
     );
 
@@ -293,6 +295,7 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
     res.add_cookie(
         Cookie::build((cookie_name, id_token))
             .secure(proto == "https")
+            .http_only(true)
             .build(),
     );
     res.remove_cookie("csrf_state");
