@@ -13,20 +13,23 @@ use openidconnect::{
 };
 use salvo::http::cookie::Cookie;
 use salvo::http::StatusCode;
+use salvo::logging::Logger;
 use salvo::prelude::{handler, Redirect, Request, Response, Router, Server, TcpListener, Text};
 use salvo::routing::PathState;
-use salvo::Listener;
+use salvo::{Listener, Service};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
 
 static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct OIDCProvider {
     client_id: ClientId,
     client_secret: ClientSecret,
     issuer_url: IssuerUrl,
     scopes: Vec<String>,
     jwks: JwkSet,
+    audience: Vec<String>,
 }
 
 fn get_env(key: &str, default: Option<&str>) -> String {
@@ -60,18 +63,23 @@ fn get_cookie(req: &Request, key: &str) -> String {
 fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
     let mut providers = HashMap::new();
 
+    info!("Starting to initialize OIDC providers.");
+
     for i in 0u32.. {
         let hostname = get_env(&format!("OIDC_PROVIDER_{}_HOSTNAME", i), None);
         let issuer_url = get_env(&format!("OIDC_PROVIDER_{}_ISSUER_URL", i), None);
         let client_id = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_ID", i), None);
         let client_secret = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_SECRET", i), None);
         let scopes = get_env(&format!("OIDC_PROVIDER_{}_SCOPES", i), None);
+        let audience = get_env(&format!("OIDC_PROVIDER_{}_AUDIENCE", i), None);
 
         if hostname.is_empty()
             || issuer_url.is_empty()
             || client_id.is_empty()
             || client_secret.is_empty()
+            || audience.is_empty()
         {
+            debug!("OIDC provider Init: Environment variable set with counter {} is incomplete. Stopping here.", i);
             break;
         }
 
@@ -91,16 +99,30 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
             .json()
             .unwrap();
 
-        providers.insert(
+        let oidc_provider = OIDCProvider {
+            client_id: ClientId::new(client_id),
+            client_secret: ClientSecret::new(client_secret),
+            issuer_url: IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
+            scopes: scopes.split(',').map(String::from).collect(),
+            audience: audience.split(',').map(String::from).collect(),
+            jwks,
+        };
+
+        debug!("OIDC provider details: {:?}", oidc_provider.clone());
+
+        providers.insert(hostname.to_lowercase(), oidc_provider);
+
+        info!(
+            "Added OIDC provider: {} -> {}",
             hostname.to_lowercase(),
-            OIDCProvider {
-                client_id: ClientId::new(client_id),
-                client_secret: ClientSecret::new(client_secret),
-                issuer_url: IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
-                scopes: scopes.split(',').map(String::from).collect(),
-                jwks,
-            },
+            issuer_url.to_string()
         );
+    }
+
+    if providers.len() == 0 {
+        warn!("No OIDC providers initialized. Please check environment variables.")
+    } else {
+        info!("Initialized {} OIDC provider.", providers.len());
     }
 
     providers
@@ -117,9 +139,11 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
     let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
         Some(val) => val,
         None => {
+            debug!("Request: No OIDC provider known for {}.", hostname.clone());
+
             return res
                 .status_code(StatusCode::BAD_GATEWAY)
-                .render(Text::Plain("No OIDC provider known for hostname."))
+                .render(Text::Plain("No OIDC provider known for hostname."));
         }
     };
 
@@ -165,6 +189,8 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
             .build(),
     );
 
+    debug!("Redirecting client to {}", authorize_url.to_string());
+
     res.render(Redirect::temporary(authorize_url.to_string()));
 }
 
@@ -185,22 +211,30 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let token = get_cookie(req, &cookie_name);
 
     if token.is_empty() {
+        debug!("Cookie key {} is empty.", cookie_name);
         return false;
     }
 
+    debug!("Received cookie value: {}", token.clone());
+
     let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
         Some(val) => val,
-        None => return false,
+        None => {
+            debug!("OIDC provider not found for hostname {}.", hostname.clone());
+            return false;
+        }
     };
 
     let header = match decode_header(&token) {
         Ok(val) => val,
         Err(_) => {
+            debug!("Error when decoding headers of token: {}", token.clone());
             return false;
         }
     };
 
     let key_id = header.kid.unwrap();
+    debug!("Token JWK Key ID: {}", key_id.clone());
 
     let jwks: JwkSet = oidc_provider.jwks;
     let jwk: &jsonwebtoken::jwk::Jwk = jwks
@@ -217,11 +251,8 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let key = DecodingKey::from_jwk(&jwk).unwrap();
     let mut validation = Validation::new(header.alg);
 
-    let audience = vec![oidc_provider.client_id.as_str()];
-    let issuer = vec![oidc_provider.issuer_url.as_str()];
-
-    validation.set_audience(&audience);
-    validation.set_issuer(&issuer);
+    validation.set_audience(&oidc_provider.audience);
+    validation.set_issuer(&vec![oidc_provider.issuer_url.as_str()]);
 
     let token = decode::<Claims>(&token, &key, &validation);
 
@@ -306,6 +337,8 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
+
     let router = Router::new()
         .push(Router::with_path("/status").get(ok_handler))
         .push(
@@ -319,6 +352,8 @@ async fn main() {
                 .push(Router::new().goal(forward_auth_handler)),
         );
 
+    let service = Service::new(router).hoop(Logger::new());
     let acceptor = TcpListener::new("0.0.0.0:3000").bind().await;
-    Server::new(acceptor).serve(router).await;
+
+    Server::new(acceptor).serve(service).await;
 }
