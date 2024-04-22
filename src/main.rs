@@ -339,29 +339,8 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
     res.render(Redirect::temporary(format!("{}://{}/", proto, hostname)));
 }
 
-static ENHANCED_SECURITY_ENABLED: Lazy<bool> =
-    Lazy::new(|| match env::var("DISABLE_ENHANCED_SECURITY") {
-        Ok(val) => {
-            if val.to_lowercase().eq("true") || val.eq("1") {
-                info!("Enhanced security is disabled. Skipping headers.");
-                false
-            } else {
-                info!("Enhanced security is enabled.");
-                true
-            }
-        }
-        Err(_) => {
-            info!("Enhanced security is enabled.");
-            true
-        }
-    });
-
 #[handler]
 async fn apply_security_headers(req: &mut Request, res: &mut Response) {
-    if false == ENHANCED_SECURITY_ENABLED.to_owned() {
-        return;
-    }
-
     res.headers_mut()
         .insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
 
@@ -395,8 +374,25 @@ async fn apply_security_headers(req: &mut Request, res: &mut Response) {
 async fn main() {
     tracing_subscriber::fmt::init();
 
+    let enhanced_security_enabled: bool =
+         match env::var("DISABLE_ENHANCED_SECURITY") {
+            Ok(val) => {
+                if val.to_lowercase().eq("true") || val.eq("1") {
+                    info!("Enhanced security is disabled.");
+                    false
+                } else {
+                    info!("Enhanced security is enabled.");
+                    true
+                }
+            }
+            Err(_) => {
+                info!("Enhanced security is enabled.");
+                true
+            }
+        };
+
     let router = Router::new()
-        .hoop(apply_security_headers)
+        .hoop_when(apply_security_headers, move |_, _| -> bool { enhanced_security_enabled.to_owned() })
         .push(Router::with_path("/status").get(ok_handler))
         .push(
             Router::with_path("/verify")
