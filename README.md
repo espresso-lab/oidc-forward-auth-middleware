@@ -2,6 +2,7 @@
 
 [![GitHub tag](https://img.shields.io/github/tag/espresso-lab/oidc-forward-auth-middleware?include_prereleases=&sort=semver&color=blue)](https://github.com/espresso-lab/oidc-forward-auth-middleware/tags/)
 [![License](https://img.shields.io/badge/License-MIT-blue)](#license)
+[![Rust Report Card](https://rust-reportcard.xuri.me/badge/github.com/espresso-lab/oidc-forward-auth-middleware)](https://rust-reportcard.xuri.me/report/github.com/espresso-lab/oidc-forward-auth-middleware)
 
 This container acts as a `ForwardAuth` middleware for the traefik ingress controller that provides OpenID Connect (OIDC) authorization.
 
