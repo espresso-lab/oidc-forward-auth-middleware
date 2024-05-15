@@ -1,10 +1,11 @@
-name: Release Docker Image 🚀
+name: Release Docker Image
 
 on:
   push:
     branches:
       - main
-
+    tags:
+      - "*.*.*"
 jobs:
   release:
     permissions:
