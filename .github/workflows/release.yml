@@ -21,7 +21,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: espresso-lab/oidc-forward-auth-middleware
+          images: ghcr.io/espresso-lab/oidc-forward-auth-middleware
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
