@@ -32,31 +32,19 @@ helm upgrade --install oidc-forward-auth-middleware espresso-lab/oidc-forward-au
 The Helm values could look like the following:
 
 ```yaml
+# Example helm values of oidc-forward-auth-middleware
+
 config:
   logLevel: info # debug, info, warn, error
 
 oidcProviders:
   - ingressHostname: app.example.com # Traefik ingress hostname you would like to protect
     issuerUrl: https://id.example.com/oauth/app1
-    clientId: app1 # or use existingSecret
-    clientSecret: mysecretpassword # or use existingSecret
+    clientId: app1
+    clientSecret: mysecretpassword
     scopes: ["email", "profile"]
     # existingSecret: oidc-config # Provide a secret in the same namespace with fields clientId, clientSecret
     audience: ["app1"]
-```
-
-An example secret to store the OIDC credentials could look like:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: oidc-config
-  namespace: auth
-type: Opaque
-stringData:
-  clientId: my-client-id
-  clientSecret: my-client-secret
 ```
 
 Last, enable it in the ingress controller of the service `app.example.com` you would like to protect:
