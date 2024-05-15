@@ -5,7 +5,8 @@ on:
     branches:
       - main
     tags:
-      - "*.*.*"
+      - "v*"
+
 jobs:
   release:
     permissions:
@@ -15,6 +16,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: espresso-lab/oidc-forward-auth-middleware
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -33,5 +40,6 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: ghcr.io/espresso-lab/oidc-forward-auth-middleware:latest
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64 # ,linux/arm64 TODO: Add support for ARM64
