@@ -3,7 +3,6 @@ use std::env;
 
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
-use once_cell::sync::Lazy;
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
@@ -22,9 +21,10 @@ use salvo::prelude::{handler, Redirect, Request, Response, Router, Server, TcpLi
 use salvo::routing::PathState;
 use salvo::{Listener, Service};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 
-static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
+static PROVIDERS: OnceLock<HashMap<String, OIDCProvider>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 struct OIDCProvider {
@@ -133,7 +133,10 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
 }
 
 fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
-    PROVIDERS.get(&hostname.to_lowercase()).cloned()
+    PROVIDERS
+        .get_or_init(|| get_oidc_providers())
+        .get(&hostname.to_lowercase())
+        .cloned()
 }
 
 #[handler]
