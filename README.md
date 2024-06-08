@@ -14,9 +14,14 @@ This container acts as a `ForwardAuth` middleware for the traefik ingress contro
 - Easy to deploy to a Kubernetes environment via Helm or to use it with Docker Compose
 - Simple configuration via environment variables or Helm values
 
-## Installation
+## Usage
 
-### Installation via Helm
+### Usage in Kubernetes / Helm
+
+Let's say you have a service called `app.example.com` you would like to protect with the OIDC middleware.
+Your OIDC provider in the example is `id.example.com`.
+
+First, install the `oidc-forward-auth-middleware` Helm chart:
 
 ```
 helm repo add espresso-lab https://espresso-lab.github.io/helm-charts
@@ -24,68 +29,47 @@ helm repo add espresso-lab https://espresso-lab.github.io/helm-charts
 helm upgrade --install oidc-forward-auth-middleware espresso-lab/oidc-forward-auth-middleware --namespace=auth
 ```
 
-## Usage
-
-### Usage in Kubernetes / Helm
+The Helm values could look like the following:
 
 ```yaml
+# Example helm values of oidc-forward-auth-middleware
+
 config:
-  sessionCookieName: x_forward_auth_session
   logLevel: info # debug, info, warn, error
-  disableEnhancedSecurity: false # Enhanced security sets HTTP security headers and forces https
 
 oidcProviders:
-  - ingressHostname: example.com # Traefik ingress hostname you would like to protect
+  - ingressHostname: app.example.com # Traefik ingress hostname you would like to protect
     issuerUrl: https://id.example.com/oauth/app1
-    clientId: app1 # or use existingSecret
-    clientSecret: mysecretpassword # or use existingSecret
+    clientId: app1
+    clientSecret: mysecretpassword
     scopes: ["email", "profile"]
-    #existingSecret: oidc-config # Provide a secret in the same namespace with fields clientId, clientSecret
+    # existingSecret: oidc-config # Provide a secret in the same namespace with fields clientId, clientSecret
     audience: ["app1"]
 ```
 
-A secret could look like:
+Last, enable it in the ingress controller of the service `app.example.com` you would like to protect:
 
 ```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: oidc-config
-  namespace: auth
-type: Opaque
-stringData:
-  clientId: my-client-id
-  clientSecret: my-client-secret
+# Example helm values of service app.example.com
+ingress:
+  enabled: true
+  hosts:
+    - app.example.com
+  ingressClassName: traefik
+  annotations:
+    # Enable middleware
+    traefik.ingress.kubernetes.io/router.middlewares: kube-system-oidc-forward-auth-middleware@kubernetescrd
 ```
+
+**That's it! :)**
 
 ### Useage in Docker Compose
 
 For the latest example have a look at the `docker-compose.yml` file.
 
-```yaml
-# Create middleware container
-middleware:
-  image: ghcr.io/espresso-lab/oidc-forward-auth-middleware:latest
-  env_file:
-    - .env.sample
-  ports:
-    - "3000:3000"
+## Architecture
 
-# Protect the whoami services
-whoami:
-  image: "traefik/whoami"
-  container_name: "whoami"
-  labels:
-    - "traefik.enable=true"
-    - "traefik.http.routers.whoami.rule=Host(`localhost`)"
-    - "traefik.http.routers.whoami.entrypoints=web"
-    - "traefik.http.routers.whoami.middlewares=test-auth@docker"
-    # Apply the ForwardAuth middleware
-    - "traefik.http.middlewares.test-auth.forwardauth.address=http://middleware:3000/verify"
-    - "traefik.http.middlewares.test-auth.forwardauth.trustForwardHeader=true"
-    - "traefik.http.middlewares.test-auth.forwardauth.authResponseHeaders=Set-Cookie,Location"
-    - "traefik.http.middlewares.test-auth.forwardauth.authRequestHeaders=Accept,Cookie"
-```
+![OIDC ForwardAuth Middleware Architecture](https://github.com/espresso-lab/oidc-forward-auth-middleware/blob/main/docs/architecture.png?raw=true)
 
 ## Configuration
 

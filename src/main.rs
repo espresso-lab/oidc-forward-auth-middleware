@@ -3,7 +3,6 @@ use std::env;
 
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
-use once_cell::sync::Lazy;
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
@@ -22,9 +21,10 @@ use salvo::prelude::{handler, Redirect, Request, Response, Router, Server, TcpLi
 use salvo::routing::PathState;
 use salvo::{Listener, Service};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 
-static PROVIDERS: Lazy<HashMap<String, OIDCProvider>> = Lazy::new(|| get_oidc_providers());
+static PROVIDERS: OnceLock<HashMap<String, OIDCProvider>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 struct OIDCProvider {
@@ -133,7 +133,10 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
 }
 
 fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
-    PROVIDERS.get(&hostname.to_lowercase()).cloned()
+    PROVIDERS
+        .get_or_init(|| get_oidc_providers())
+        .get(&hostname.to_lowercase())
+        .cloned()
 }
 
 #[handler]
@@ -241,16 +244,15 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     debug!("Token JWK Key ID: {}", key_id.clone());
 
     let jwks: JwkSet = oidc_provider.jwks;
-    let jwk: &jsonwebtoken::jwk::Jwk = jwks
-        .keys
-        .iter()
-        .find(|k| {
-            k.common
-                .key_id
-                .clone()
-                .is_some_and(|s| s.eq(key_id.as_str()))
-        })
-        .unwrap();
+    let jwk: &jsonwebtoken::jwk::Jwk = match jwks.keys.iter().find(|k| {
+        k.common
+            .key_id
+            .clone()
+            .is_some_and(|s| s.eq(key_id.as_str()))
+    }) {
+        Some(val) => val,
+        _ => return false,
+    };
 
     let key = DecodingKey::from_jwk(&jwk).unwrap();
     let mut validation = Validation::new(header.alg);
@@ -374,25 +376,26 @@ async fn apply_security_headers(req: &mut Request, res: &mut Response) {
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let enhanced_security_enabled: bool =
-         match env::var("DISABLE_ENHANCED_SECURITY") {
-            Ok(val) => {
-                if val.to_lowercase().eq("true") || val.eq("1") {
-                    info!("Enhanced security is disabled.");
-                    false
-                } else {
-                    info!("Enhanced security is enabled.");
-                    true
-                }
-            }
-            Err(_) => {
+    let enhanced_security_enabled: bool = match env::var("DISABLE_ENHANCED_SECURITY") {
+        Ok(val) => {
+            if val.to_lowercase().eq("true") || val.eq("1") {
+                info!("Enhanced security is disabled.");
+                false
+            } else {
                 info!("Enhanced security is enabled.");
                 true
             }
-        };
+        }
+        Err(_) => {
+            info!("Enhanced security is enabled.");
+            true
+        }
+    };
 
     let router = Router::new()
-        .hoop_when(apply_security_headers, move |_, _| -> bool { enhanced_security_enabled.to_owned() })
+        .hoop_when(apply_security_headers, move |_, _| -> bool {
+            enhanced_security_enabled.to_owned()
+        })
         .push(Router::with_path("/status").get(ok_handler))
         .push(
             Router::with_path("/verify")
