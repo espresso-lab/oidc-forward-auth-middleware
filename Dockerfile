@@ -38,7 +38,7 @@ RUN set -ex; \
     esac; \
     cargo build --release --target $target-unknown-linux-musl --bin ${BINARY_NAME} && \
     mv ./target/$target-unknown-linux-musl/release/${BINARY_NAME} /build && \
-    upx --best --lzma ./${BINARY_NAME}
+    upx --best --lzma /build
 
 FROM scratch AS runtime
 COPY --from=builder /build /app
