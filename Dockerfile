@@ -37,11 +37,11 @@ RUN set -ex; \
     *) exit 1 ;; \
     esac; \
     cargo build --release --target $target-unknown-linux-musl --bin ${BINARY_NAME} && \
-    mv ./target/$target-unknown-linux-musl/release/${BINARY_NAME} /app && \
+    mv ./target/$target-unknown-linux-musl/release/${BINARY_NAME} /build && \
     upx --best --lzma ./${BINARY_NAME}
 
 FROM scratch AS runtime
-COPY --from=builder /app /app
+COPY --from=builder /build /app
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 EXPOSE 3000
 CMD ["/app"]
