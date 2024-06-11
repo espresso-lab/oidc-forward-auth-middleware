@@ -8,7 +8,7 @@ use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
 use openidconnect::{
     AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
+    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
 };
 use salvo::http::cookie::Cookie;
 use salvo::http::header::{
@@ -17,7 +17,9 @@ use salvo::http::header::{
 };
 use salvo::http::{HeaderValue, StatusCode};
 use salvo::logging::Logger;
-use salvo::prelude::{handler, Redirect, Request, Response, Router, Server, TcpListener, Text};
+use salvo::prelude::{
+    handler, Depot, FlowCtrl, Redirect, Request, Response, Router, Server, TcpListener, Text,
+};
 use salvo::routing::PathState;
 use salvo::{Listener, Service};
 use serde::{Deserialize, Serialize};
@@ -25,6 +27,18 @@ use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 
 static PROVIDERS: OnceLock<HashMap<String, OIDCProvider>> = OnceLock::new();
+static ACCESS_TOKEN_COOKIE_NAME: &str = "x_oidc_access_token";
+static REFRESH_TOKEN_COOKIE_NAME: &str = "x_oidc_refresh_token";
+static STATE_COOKIE_NAME: &str = "x_oidc_csrf";
+static PKCS_COOKIE_NAME: &str = "x_oidc_pkce";
+
+#[derive(Clone, Debug)]
+struct ForwardAuthHeaders {
+    https: bool,
+    protocol: String,
+    host: String,
+    uri: String,
+}
 
 #[derive(Clone, Debug)]
 struct OIDCProvider {
@@ -34,34 +48,6 @@ struct OIDCProvider {
     scopes: Vec<String>,
     jwks: JwkSet,
     audience: Vec<String>,
-}
-
-fn get_env(key: &str, default: Option<&str>) -> String {
-    env::var(key).unwrap_or_else(|_| default.unwrap_or("").to_owned())
-}
-
-fn get_header(req: &Request, key: &str) -> String {
-    req.headers()
-        .get(key)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn get_query_param(querystring: &str, key: &str) -> String {
-    let hash_query: HashMap<String, String> =
-        Url::parse(&format!("https://whatever{}", querystring))
-            .unwrap()
-            .query_pairs()
-            .into_owned()
-            .collect();
-    hash_query.get(key).unwrap_or(&"".to_string()).to_owned()
-}
-
-fn get_cookie(req: &Request, key: &str) -> String {
-    req.cookie(key)
-        .map(|cookie| cookie.value().to_string())
-        .unwrap_or_else(|| "".to_string())
 }
 
 fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
@@ -139,32 +125,82 @@ fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
         .cloned()
 }
 
-#[handler]
-async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
+fn get_oauth2_client(
+    req: &mut Request,
+) -> Result<(CoreClient, Vec<Scope>, OIDCProvider, bool), String> {
     let hostname = get_header(req, "x-forwarded-host");
     let proto = get_header(req, "x-forwarded-proto");
+    let is_https = proto.to_lowercase().eq("https");
     let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
-        Some(val) => val,
-        None => {
-            debug!("Request: No OIDC provider known for {}.", hostname.clone());
-
-            return res
-                .status_code(StatusCode::BAD_GATEWAY)
-                .render(Text::Plain("No OIDC provider known for hostname."));
-        }
+        Some(v) => v,
+        None => return Err("No OIDC provider known for hostname.".to_string()),
     };
 
     let provider_metadata =
         CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
-    let client = CoreClient::from_provider_metadata(
-        provider_metadata,
-        oidc_provider.client_id,
-        Some(oidc_provider.client_secret),
-    )
-    .set_redirect_uri(
-        RedirectUrl::new(format!("{}://{}/auth_callback", proto, hostname.clone()).to_string())
-            .expect("Invalid redirect URL"),
-    );
+
+    let scopes = oidc_provider
+        .clone()
+        .scopes
+        .iter()
+        .map(|s| Scope::new(s.to_string()))
+        .collect();
+
+    Ok((
+        CoreClient::from_provider_metadata(
+            provider_metadata,
+            oidc_provider.clone().client_id,
+            Some(oidc_provider.clone().client_secret),
+        )
+        .set_redirect_uri(
+            RedirectUrl::new(format!("{}://{}/auth_callback", proto, hostname.clone()).to_string())
+                .expect("Invalid redirect URL"),
+        ),
+        scopes,
+        oidc_provider,
+        is_https,
+    ))
+}
+
+fn get_env(key: &str, default: Option<&str>) -> String {
+    env::var(key).unwrap_or_else(|_| default.unwrap_or("").to_owned())
+}
+
+fn get_header(req: &Request, key: &str) -> String {
+    req.headers()
+        .get(key)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn get_query_param(querystring: &str, key: &str) -> String {
+    let hash_query: HashMap<String, String> =
+        Url::parse(&format!("https://whatever{}", querystring))
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+    hash_query.get(key).unwrap_or(&"".to_string()).to_owned()
+}
+
+fn get_cookie(req: &Request, key: &str) -> String {
+    req.cookie(key)
+        .map(|cookie| cookie.value().to_string())
+        .unwrap_or_else(|| "".to_string())
+}
+
+#[handler]
+async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
+    let (client, scopes, _, is_https) = match get_oauth2_client(req) {
+        Ok(val) => val,
+        Err(err) => {
+            res.status_code(StatusCode::INTERNAL_SERVER_ERROR)
+                .render(Text::Plain(err));
+
+            return ();
+        }
+    };
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
@@ -174,24 +210,19 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
             CsrfToken::new_random,
             Nonce::new_random,
         )
-        .add_scopes(
-            oidc_provider
-                .scopes
-                .iter()
-                .map(|s| Scope::new(s.to_string())),
-        )
+        .add_scopes(scopes)
         .set_pkce_challenge(pkce_challenge)
         .url();
 
     res.add_cookie(
-        Cookie::build(("pkce_verifier", pkce_verifier.secret().to_string()))
-            .secure(proto == "https")
+        Cookie::build((PKCS_COOKIE_NAME, pkce_verifier.secret().to_string()))
+            .secure(is_https)
             .http_only(true)
             .build(),
     );
     res.add_cookie(
-        Cookie::build(("csrf_state", csrf_state.secret().to_string()))
-            .secure(proto == "https")
+        Cookie::build((STATE_COOKIE_NAME, csrf_state.secret().to_string()))
+            .secure(is_https)
             .http_only(true)
             .build(),
     );
@@ -203,7 +234,7 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
 
 #[handler]
 async fn ok_handler(res: &mut Response) {
-    res.status_code(StatusCode::OK).render(Text::Plain("OK"));
+    res.status_code(StatusCode::NO_CONTENT);
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -212,13 +243,68 @@ struct Claims {
     exp: usize,
 }
 
+#[handler]
+async fn renew_access_token(req: &mut Request, res: &mut Response, ctrl: &mut FlowCtrl) {
+    let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
+
+    if refresh_token.is_empty() {
+        res.remove_cookie(REFRESH_TOKEN_COOKIE_NAME);
+        ctrl.cease(); // TODO: Check if that works
+                      // else: res.status_code(StatusCode::UNAUTHORIZED);
+        return;
+    }
+
+    let (client, _, _, is_https) = match get_oauth2_client(req) {
+        Ok(val) => val,
+        Err(err) => {
+            res.status_code(StatusCode::INTERNAL_SERVER_ERROR)
+                .render(Text::Plain(err));
+
+            return ();
+        }
+    };
+
+    let token_response = client
+        .exchange_refresh_token(&RefreshToken::new(refresh_token))
+        .request(http_client)
+        .unwrap();
+
+    let access_token = token_response.clone().access_token().secret().to_string();
+    let refresh_token = token_response.refresh_token().unwrap().secret().to_string();
+
+    if access_token.is_empty() {
+        res.status_code(StatusCode::UNAUTHORIZED);
+    }
+
+    res.add_cookie(
+        Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token))
+            .secure(is_https)
+            .http_only(true)
+            .build(),
+    );
+
+    res.add_cookie(
+        Cookie::build((REFRESH_TOKEN_COOKIE_NAME, refresh_token))
+            .secure(is_https)
+            .http_only(true)
+            .build(),
+    );
+
+    info!("Renewed session");
+
+    res.status_code(StatusCode::NO_CONTENT);
+}
+
+fn check_refresh_token_cookie(req: &mut Request, _state: &mut PathState) -> bool {
+    !get_cookie(req, REFRESH_TOKEN_COOKIE_NAME).is_empty()
+}
+
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let hostname = get_header(req, "x-forwarded-host");
-    let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
-    let token = get_cookie(req, &cookie_name);
+    let token = get_cookie(req, ACCESS_TOKEN_COOKIE_NAME);
 
     if token.is_empty() {
-        debug!("Cookie key {} is empty.", cookie_name);
+        debug!("Cookie key {} is empty.", ACCESS_TOKEN_COOKIE_NAME);
         return false;
     }
 
@@ -267,7 +353,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
 
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     let uri = get_header(req, "x-forwarded-uri");
-    let csrf_state = get_cookie(req, "csrf_state");
+    let csrf_state = get_cookie(req, STATE_COOKIE_NAME);
     let code = get_query_param(&uri, "code");
     let state = get_query_param(&uri, "state");
 
@@ -286,12 +372,13 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
 }
 
 #[handler]
-async fn set_cookie(req: &mut Request, res: &mut Response) {
-    let uri = get_header(req, "x-forwarded-uri");
-    let hostname = get_header(req, "x-forwarded-host");
-    let proto = get_header(req, "x-forwarded-proto");
-    let code = get_query_param(&uri, "code");
-    let pkce_verifier = get_cookie(req, "pkce_verifier");
+async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
+    let is_https = depot.get::<bool>("is_https").unwrap().to_owned();
+    let client = depot.obtain::<CoreClient>().unwrap();
+    let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
+
+    let code = get_query_param(&headers.uri, "code");
+    let pkce_verifier = get_cookie(req, PKCS_COOKIE_NAME);
 
     if code.is_empty() {
         return res
@@ -299,69 +386,62 @@ async fn set_cookie(req: &mut Request, res: &mut Response) {
             .render(Text::Plain("No Token in response."));
     }
 
-    let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
-        Some(val) => val,
-        None => {
-            return res
-                .status_code(StatusCode::BAD_GATEWAY)
-                .render(Text::Plain("No OIDC provider known for hostname."));
-        }
-    };
-
-    let provider_metadata =
-        CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
-    let client = CoreClient::from_provider_metadata(
-        provider_metadata,
-        oidc_provider.client_id,
-        Some(oidc_provider.client_secret),
-    )
-    .set_redirect_uri(
-        RedirectUrl::new(format!("{}://{}/auth_callback", proto, hostname.clone()).to_string())
-            .expect("Invalid redirect URL"),
-    );
-
     let token_response = client
         .exchange_code(AuthorizationCode::new(code))
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
         .request(http_client)
         .unwrap();
 
-    let id_token = token_response.id_token().unwrap().clone().to_string();
+    // let id_token = token_response
+    //     .clone()
+    //     .id_token()
+    //     .unwrap()
+    //     .clone()
+    //     .to_string();
 
-    let cookie_name = get_env("FORWARD_AUTH_COOKIE", Some("x_forward_auth_session"));
+    let access_token = token_response.clone().access_token().secret().to_string();
+    let refresh_token = token_response.refresh_token().unwrap().secret().to_string();
+
     res.add_cookie(
-        Cookie::build((cookie_name, id_token))
-            .secure(proto == "https")
+        Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token))
+            .secure(is_https)
             .http_only(true)
             .build(),
     );
-    res.remove_cookie("csrf_state");
-    res.remove_cookie("pkce_verifier");
 
-    res.render(Redirect::temporary(format!("{}://{}/", proto, hostname)));
+    res.add_cookie(
+        Cookie::build((REFRESH_TOKEN_COOKIE_NAME, refresh_token))
+            .secure(is_https)
+            .http_only(true)
+            .build(),
+    );
+
+    res.remove_cookie(STATE_COOKIE_NAME);
+    res.remove_cookie(PKCS_COOKIE_NAME);
+
+    // Todo: redirect to the page vistited before
+    res.render(Redirect::temporary(format!(
+        "{}://{}/",
+        headers.protocol, headers.host
+    )));
 }
 
 #[handler]
 async fn apply_security_headers(req: &mut Request, res: &mut Response) {
-    res.headers_mut()
-        .insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
-
-    res.headers_mut().insert(
+    let header = res.headers_mut();
+    header.insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
+    header.insert(
         STRICT_TRANSPORT_SECURITY,
         HeaderValue::from_static("max-age=63072000; includeSubDomains"),
     );
-    res.headers_mut()
-        .insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("noopen"));
+    header.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("noopen"));
+    header.insert(X_XSS_PROTECTION, HeaderValue::from_static("1; mode=block"));
+    header.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
 
-    res.headers_mut()
-        .insert(X_XSS_PROTECTION, HeaderValue::from_static("1; mode=block"));
-
-    res.headers_mut().insert(
-        REFERRER_POLICY,
-        HeaderValue::from_static("strict-origin-when-cross-origin"),
-    );
-
-    if get_header(req, "x-forwarded-proto").eq("http") {
+    if get_header(req, "x-forwarded-proto")
+        .to_lowercase()
+        .eq("http")
+    {
         debug!("Redirecting client to HTTPS.");
 
         res.render(Redirect::temporary(format!(
@@ -372,39 +452,63 @@ async fn apply_security_headers(req: &mut Request, res: &mut Response) {
     }
 }
 
+#[handler]
+async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut Depot) {
+    let (client, scopes, _, _) = match get_oauth2_client(req) {
+        Ok(val) => val,
+        Err(err) => {
+            return res
+                .status_code(StatusCode::INTERNAL_SERVER_ERROR)
+                .render(Text::Plain(err));
+        }
+    };
+
+    let protocol = get_header(req, "x-forwarded-proto");
+
+    let forward_auth_headers = ForwardAuthHeaders {
+        host: get_header(req, "x-forwarded-host"),
+        protocol: protocol.clone(),
+        https: protocol.to_lowercase().eq("https"),
+        uri: get_header(req, "x-forwarded-uri"),
+    };
+
+    depot.inject(forward_auth_headers);
+    depot.inject(client);
+    depot.inject(scopes);
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
     let enhanced_security_enabled: bool = match env::var("DISABLE_ENHANCED_SECURITY") {
-        Ok(val) => {
-            if val.to_lowercase().eq("true") || val.eq("1") {
-                info!("Enhanced security is disabled.");
-                false
-            } else {
-                info!("Enhanced security is enabled.");
-                true
-            }
-        }
-        Err(_) => {
-            info!("Enhanced security is enabled.");
-            true
-        }
+        Ok(val) => !(val.to_lowercase().eq("true") || val.eq("1")),
+        Err(_) => true,
     };
 
+    // Info about enhanced security option
+    info!(
+        "Enhanced security is {}.",
+        if enhanced_security_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+
+    // TODO: Improvement idea: write OAuth Client in depot via hoop
+
     let router = Router::new()
-        .hoop_when(apply_security_headers, move |_, _| -> bool {
-            enhanced_security_enabled.to_owned()
-        })
         .push(Router::with_path("/status").get(ok_handler))
         .push(
             Router::with_path("/verify")
+                .hoop_when(apply_security_headers, move |_, _| -> bool {
+                    enhanced_security_enabled.to_owned()
+                })
+                .hoop(apply_oauth2_client)
                 .push(Router::with_filter_fn(check_cookie).goal(ok_handler))
-                .push(
-                    Router::with_filter_fn(check_params)
-                        .hoop(set_cookie)
-                        .goal(ok_handler),
-                )
+                .push(Router::with_filter_fn(check_refresh_token_cookie).goal(renew_access_token))
+                .push(Router::with_filter_fn(check_params).goal(set_cookie))
                 .push(Router::new().goal(forward_auth_handler)),
         );
 
