@@ -79,7 +79,6 @@ For the latest example have a look at the `docker-compose.yml` file.
 
 | Environment variable      | Type    | Description                                                                                |
 | ------------------------- | ------- | ------------------------------------------------------------------------------------------ |
-| FORWARD_AUTH_COOKIE       | String  | Name of the browser cookie that stores the JWT session.                                    |
 | RUST_LOG                  | String  | info, debug, error, warning                                                                |
 | DISABLE_ENHANCED_SECURITY | Boolean | Default: `false`. Sets various security HTTP headers and redirects http requests to https. |
 
