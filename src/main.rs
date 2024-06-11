@@ -57,7 +57,7 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
     info!("Starting to initialize OIDC providers.");
 
     for i in 0u32.. {
-        let hostname = get_env(&format!("OIDC_PROVIDER_{}_HOSTNAME", i), None);
+        let hostname = get_env(&format!("OIDC_PROVIDER_{}_HOSTNAME", i), None).to_lowercase();
         let issuer_url = get_env(&format!("OIDC_PROVIDER_{}_ISSUER_URL", i), None);
         let client_id = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_ID", i), None);
         let client_secret = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_SECRET", i), None);
@@ -101,13 +101,9 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
 
         debug!("OIDC provider details: {:?}", &oidc_provider);
 
-        providers.insert(hostname.to_lowercase(), oidc_provider);
+        providers.insert(hostname.to_owned(), oidc_provider);
 
-        info!(
-            "Added OIDC provider: {} -> {}",
-            hostname.to_lowercase(),
-            issuer_url.to_string()
-        );
+        info!("Added OIDC provider: {} -> {}", &hostname, &issuer_url);
     }
 
     if providers.len() == 0 {
@@ -462,7 +458,7 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
 
     let forward_auth_headers = ForwardAuthHeaders {
         host: get_header(req, "x-forwarded-host"),
-        protocol: protocol.clone(),
+        protocol: protocol.to_owned(),
         https: protocol.to_lowercase().eq("https"),
         uri: get_header(req, "x-forwarded-uri"),
     };
