@@ -192,15 +192,9 @@ fn get_cookie(req: &Request, key: &str) -> String {
 
 #[handler]
 async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
-    let (client, scopes, _, is_https) = match get_oauth2_client(req) {
-        Ok(val) => val,
-        Err(err) => {
-            res.status_code(StatusCode::INTERNAL_SERVER_ERROR)
-                .render(Text::Plain(err));
-
-            return ();
-        }
-    };
+    let is_https = depot.get::<bool>("is_https").unwrap().to_owned();
+    let client = depot.obtain::<CoreClient>().unwrap();
+    let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
@@ -254,15 +248,9 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, ctrl: &mut Fl
         return;
     }
 
-    let (client, _, _, is_https) = match get_oauth2_client(req) {
-        Ok(val) => val,
-        Err(err) => {
-            res.status_code(StatusCode::INTERNAL_SERVER_ERROR)
-                .render(Text::Plain(err));
-
-            return ();
-        }
-    };
+    let is_https = depot.get::<bool>("is_https").unwrap().to_owned();
+    let client = depot.obtain::<CoreClient>().unwrap();
+    let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
 
     let token_response = client
         .exchange_refresh_token(&RefreshToken::new(refresh_token))
