@@ -191,11 +191,10 @@ fn get_cookie(req: &Request, key: &str) -> String {
 }
 
 #[handler]
-async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
-    let is_https = depot.get::<bool>("is_https").unwrap().to_owned();
+async fn forward_auth_handler(_req: &mut Request, res: &mut Response, depot: &mut Depot) {
     let client = depot.obtain::<CoreClient>().unwrap();
+    let scopes = depot.obtain::<Vec<Scope>>().unwrap().to_owned();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
-
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let (authorize_url, csrf_state, _nonce) = client
@@ -210,13 +209,13 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response) {
 
     res.add_cookie(
         Cookie::build((PKCS_COOKIE_NAME, pkce_verifier.secret().to_string()))
-            .secure(is_https)
+            .secure(headers.https)
             .http_only(true)
             .build(),
     );
     res.add_cookie(
         Cookie::build((STATE_COOKIE_NAME, csrf_state.secret().to_string()))
-            .secure(is_https)
+            .secure(headers.https)
             .http_only(true)
             .build(),
     );
@@ -238,7 +237,12 @@ struct Claims {
 }
 
 #[handler]
-async fn renew_access_token(req: &mut Request, res: &mut Response, ctrl: &mut FlowCtrl) {
+async fn renew_access_token(
+    req: &mut Request,
+    res: &mut Response,
+    ctrl: &mut FlowCtrl,
+    depot: &mut Depot,
+) {
     let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
 
     if refresh_token.is_empty() {
@@ -248,7 +252,6 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, ctrl: &mut Fl
         return;
     }
 
-    let is_https = depot.get::<bool>("is_https").unwrap().to_owned();
     let client = depot.obtain::<CoreClient>().unwrap();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
 
@@ -266,14 +269,14 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, ctrl: &mut Fl
 
     res.add_cookie(
         Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token))
-            .secure(is_https)
+            .secure(headers.https)
             .http_only(true)
             .build(),
     );
 
     res.add_cookie(
         Cookie::build((REFRESH_TOKEN_COOKIE_NAME, refresh_token))
-            .secure(is_https)
+            .secure(headers.https)
             .http_only(true)
             .build(),
     );
@@ -283,10 +286,12 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, ctrl: &mut Fl
     res.status_code(StatusCode::NO_CONTENT);
 }
 
+// TODO: Needed?
 fn check_refresh_token_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     !get_cookie(req, REFRESH_TOKEN_COOKIE_NAME).is_empty()
 }
 
+// TODO: Refactor from path check to middleware
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let hostname = get_header(req, "x-forwarded-host");
     let token = get_cookie(req, ACCESS_TOKEN_COOKIE_NAME);
@@ -339,6 +344,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     token.is_ok()
 }
 
+// TODO: refactor ?
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     let uri = get_header(req, "x-forwarded-uri");
     let csrf_state = get_cookie(req, STATE_COOKIE_NAME);
@@ -361,7 +367,6 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
 
 #[handler]
 async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
-    let is_https = depot.get::<bool>("is_https").unwrap().to_owned();
     let client = depot.obtain::<CoreClient>().unwrap();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
 
@@ -380,26 +385,19 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
         .request(http_client)
         .unwrap();
 
-    // let id_token = token_response
-    //     .clone()
-    //     .id_token()
-    //     .unwrap()
-    //     .clone()
-    //     .to_string();
-
     let access_token = token_response.clone().access_token().secret().to_string();
     let refresh_token = token_response.refresh_token().unwrap().secret().to_string();
 
     res.add_cookie(
         Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token))
-            .secure(is_https)
+            .secure(headers.https)
             .http_only(true)
             .build(),
     );
 
     res.add_cookie(
         Cookie::build((REFRESH_TOKEN_COOKIE_NAME, refresh_token))
-            .secure(is_https)
+            .secure(headers.https)
             .http_only(true)
             .build(),
     );
@@ -415,27 +413,25 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
 }
 
 #[handler]
-async fn apply_security_headers(req: &mut Request, res: &mut Response) {
-    let header = res.headers_mut();
-    header.insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
-    header.insert(
+async fn apply_security_headers(_req: &mut Request, res: &mut Response, depot: &mut Depot) {
+    let auth_headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
+    let headers = res.headers_mut();
+
+    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
+    headers.insert(
         STRICT_TRANSPORT_SECURITY,
         HeaderValue::from_static("max-age=63072000; includeSubDomains"),
     );
-    header.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("noopen"));
-    header.insert(X_XSS_PROTECTION, HeaderValue::from_static("1; mode=block"));
-    header.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("noopen"));
+    headers.insert(X_XSS_PROTECTION, HeaderValue::from_static("1; mode=block"));
+    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
 
-    if get_header(req, "x-forwarded-proto")
-        .to_lowercase()
-        .eq("http")
-    {
+    if !auth_headers.https {
         debug!("Redirecting client to HTTPS.");
 
         res.render(Redirect::temporary(format!(
             "https://{}/{}",
-            get_header(req, "x-forwarded-host"),
-            get_header(req, "x-forwarded-uri")
+            auth_headers.host, auth_headers.uri
         )));
     }
 }
@@ -490,10 +486,10 @@ async fn main() {
         .push(Router::with_path("/status").get(ok_handler))
         .push(
             Router::with_path("/verify")
+                .hoop(apply_oauth2_client)
                 .hoop_when(apply_security_headers, move |_, _| -> bool {
                     enhanced_security_enabled.to_owned()
                 })
-                .hoop(apply_oauth2_client)
                 .push(Router::with_filter_fn(check_cookie).goal(ok_handler))
                 .push(Router::with_filter_fn(check_refresh_token_cookie).goal(renew_access_token))
                 .push(Router::with_filter_fn(check_params).goal(set_cookie))
