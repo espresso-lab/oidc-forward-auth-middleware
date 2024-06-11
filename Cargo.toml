@@ -16,6 +16,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+urlencoding = "*"
 openidconnect = { version = "3", features = [
     "reqwest",
     "rustls-tls",

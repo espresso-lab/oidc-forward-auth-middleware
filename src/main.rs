@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 
 use jsonwebtoken::jwk::JwkSet;
-use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
+use jsonwebtoken::{decode as jwt_decode, decode_header, DecodingKey, Validation};
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
@@ -25,6 +25,7 @@ use salvo::{Listener, Service};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
+use urlencoding::decode;
 
 static PROVIDERS: OnceLock<HashMap<String, OIDCProvider>> = OnceLock::new();
 static ACCESS_TOKEN_COOKIE_NAME: &str = "x_oidc_access_token";
@@ -74,7 +75,7 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
         }
 
         let provider_metadata = CoreProviderMetadata::discover(
-            &IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
+            &IssuerUrl::new(issuer_url.to_owned()).expect("Invalid issuer URL"),
             http_client,
         )
         .unwrap();
@@ -92,13 +93,13 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
         let oidc_provider = OIDCProvider {
             client_id: ClientId::new(client_id),
             client_secret: ClientSecret::new(client_secret),
-            issuer_url: IssuerUrl::new(issuer_url.to_string()).expect("Invalid issuer URL"),
+            issuer_url: IssuerUrl::new(issuer_url.to_owned()).expect("Invalid issuer URL"),
             scopes: scopes.split(',').map(String::from).collect(),
             audience: audience.split(',').map(String::from).collect(),
             jwks,
         };
 
-        debug!("OIDC provider details: {:?}", oidc_provider.clone());
+        debug!("OIDC provider details: {:?}", &oidc_provider);
 
         providers.insert(hostname.to_lowercase(), oidc_provider);
 
@@ -118,20 +119,17 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
     providers
 }
 
-fn get_oidc_provider_for_hostname(hostname: String) -> Option<OIDCProvider> {
+fn get_oidc_provider_for_hostname(hostname: &str) -> Option<OIDCProvider> {
     PROVIDERS
         .get_or_init(|| get_oidc_providers())
         .get(&hostname.to_lowercase())
         .cloned()
 }
 
-fn get_oauth2_client(
-    req: &mut Request,
-) -> Result<(CoreClient, Vec<Scope>, OIDCProvider, bool), String> {
+fn get_oauth2_client(req: &mut Request) -> Result<(CoreClient, Vec<Scope>), String> {
     let hostname = get_header(req, "x-forwarded-host");
     let proto = get_header(req, "x-forwarded-proto");
-    let is_https = proto.to_lowercase().eq("https");
-    let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
+    let oidc_provider = match get_oidc_provider_for_hostname(&hostname) {
         Some(v) => v,
         None => return Err("No OIDC provider known for hostname.".to_string()),
     };
@@ -140,7 +138,6 @@ fn get_oauth2_client(
         CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
 
     let scopes = oidc_provider
-        .clone()
         .scopes
         .iter()
         .map(|s| Scope::new(s.to_string()))
@@ -149,16 +146,14 @@ fn get_oauth2_client(
     Ok((
         CoreClient::from_provider_metadata(
             provider_metadata,
-            oidc_provider.clone().client_id,
-            Some(oidc_provider.clone().client_secret),
+            oidc_provider.client_id.to_owned(),
+            Some(oidc_provider.client_secret.to_owned()),
         )
         .set_redirect_uri(
-            RedirectUrl::new(format!("{}://{}/auth_callback", proto, hostname.clone()).to_string())
+            RedirectUrl::new(format!("{}://{}/auth_callback", &proto, &hostname).to_string())
                 .expect("Invalid redirect URL"),
         ),
         scopes,
-        oidc_provider,
-        is_https,
     ))
 }
 
@@ -247,6 +242,7 @@ async fn renew_access_token(
 
     if refresh_token.is_empty() {
         res.remove_cookie(REFRESH_TOKEN_COOKIE_NAME);
+        info!("ctrl.cease()");
         ctrl.cease(); // TODO: Check if that works
                       // else: res.status_code(StatusCode::UNAUTHORIZED);
         return;
@@ -255,13 +251,25 @@ async fn renew_access_token(
     let client = depot.obtain::<CoreClient>().unwrap();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
 
-    let token_response = client
+    let token_response = match client
         .exchange_refresh_token(&RefreshToken::new(refresh_token))
         .request(http_client)
-        .unwrap();
+    {
+        Ok(v) => v,
+        Err(err) => {
+            warn!("Error exchanging refresh token: {}", err);
+            ctrl.cease(); // TODO: Check if that works
+            return;
+        }
+    };
 
-    let access_token = token_response.clone().access_token().secret().to_string();
-    let refresh_token = token_response.refresh_token().unwrap().secret().to_string();
+    let access_token = decode(&token_response.access_token().secret())
+        .unwrap()
+        .into_owned();
+
+    let refresh_token = decode(&token_response.refresh_token().unwrap().secret())
+        .unwrap()
+        .into_owned();
 
     if access_token.is_empty() {
         res.status_code(StatusCode::UNAUTHORIZED);
@@ -286,10 +294,10 @@ async fn renew_access_token(
     res.status_code(StatusCode::NO_CONTENT);
 }
 
-// TODO: Needed?
-fn check_refresh_token_cookie(req: &mut Request, _state: &mut PathState) -> bool {
-    !get_cookie(req, REFRESH_TOKEN_COOKIE_NAME).is_empty()
-}
+// // TODO: Needed?
+// fn check_refresh_token_cookie(req: &mut Request, _state: &mut PathState) -> bool {
+//     !get_cookie(req, REFRESH_TOKEN_COOKIE_NAME).is_empty()
+// }
 
 // TODO: Refactor from path check to middleware
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
@@ -301,12 +309,12 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
         return false;
     }
 
-    debug!("Received cookie value: {}", token.clone());
+    debug!("Received cookie value: {}", &token);
 
-    let oidc_provider = match get_oidc_provider_for_hostname(hostname.clone()) {
+    let oidc_provider = match get_oidc_provider_for_hostname(&hostname) {
         Some(val) => val,
         None => {
-            debug!("OIDC provider not found for hostname {}.", hostname.clone());
+            debug!("OIDC provider not found for hostname {}.", &hostname);
             return false;
         }
     };
@@ -314,19 +322,19 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let header = match decode_header(&token) {
         Ok(val) => val,
         Err(_) => {
-            debug!("Error when decoding headers of token: {}", token.clone());
+            debug!("Error when decoding headers of token: {}", &token);
             return false;
         }
     };
 
     let key_id = header.kid.unwrap();
-    debug!("Token JWK Key ID: {}", key_id.clone());
+    debug!("Token JWK Key ID: {}", &key_id);
 
     let jwks: JwkSet = oidc_provider.jwks;
     let jwk: &jsonwebtoken::jwk::Jwk = match jwks.keys.iter().find(|k| {
         k.common
             .key_id
-            .clone()
+            .as_ref()
             .is_some_and(|s| s.eq(key_id.as_str()))
     }) {
         Some(val) => val,
@@ -339,9 +347,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     validation.set_audience(&oidc_provider.audience);
     validation.set_issuer(&vec![oidc_provider.issuer_url.as_str()]);
 
-    let token = decode::<Claims>(&token, &key, &validation);
-
-    token.is_ok()
+    jwt_decode::<Claims>(&token, &key, &validation).is_ok()
 }
 
 // TODO: refactor ?
@@ -362,7 +368,7 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
 
     let hostname = get_header(req, "x-forwarded-host");
 
-    get_oidc_provider_for_hostname(hostname.clone()).is_some()
+    get_oidc_provider_for_hostname(&hostname).is_some()
 }
 
 #[handler]
@@ -385,8 +391,13 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
         .request(http_client)
         .unwrap();
 
-    let access_token = token_response.clone().access_token().secret().to_string();
-    let refresh_token = token_response.refresh_token().unwrap().secret().to_string();
+    let access_token = decode(&token_response.access_token().secret())
+        .unwrap()
+        .into_owned();
+
+    let refresh_token = decode(&token_response.refresh_token().unwrap().secret())
+        .unwrap()
+        .into_owned();
 
     res.add_cookie(
         Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token))
@@ -438,7 +449,7 @@ async fn apply_security_headers(_req: &mut Request, res: &mut Response, depot: &
 
 #[handler]
 async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut Depot) {
-    let (client, scopes, _, _) = match get_oauth2_client(req) {
+    let (client, scopes) = match get_oauth2_client(req) {
         Ok(val) => val,
         Err(err) => {
             return res
@@ -480,8 +491,6 @@ async fn main() {
         }
     );
 
-    // TODO: Improvement idea: write OAuth Client in depot via hoop
-
     let router = Router::new()
         .push(Router::with_path("/status").get(ok_handler))
         .push(
@@ -491,7 +500,7 @@ async fn main() {
                     enhanced_security_enabled.to_owned()
                 })
                 .push(Router::with_filter_fn(check_cookie).goal(ok_handler))
-                .push(Router::with_filter_fn(check_refresh_token_cookie).goal(renew_access_token))
+                .push(Router::new().goal(renew_access_token)) // TODO: Filter needed?
                 .push(Router::with_filter_fn(check_params).goal(set_cookie))
                 .push(Router::new().goal(forward_auth_handler)),
         );
