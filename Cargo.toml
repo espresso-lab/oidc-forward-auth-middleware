@@ -20,7 +20,7 @@ openidconnect = { version = "3", features = [
     "reqwest",
     "rustls-tls",
 ], default-features = false }
-salvo = { version = "0.64", features = [
+salvo = { version = "0", features = [
     "cookie",
     "server",
     "quinn",
@@ -36,5 +36,5 @@ reqwest = { version = "0", features = [
 ], default-features = false }
 serde = "1"
 openssl = { version = "0", features = ["vendored"], default-features = false }
-tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing = "0"
+tracing-subscriber = "0"
