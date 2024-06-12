@@ -241,9 +241,11 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
 
     let client = depot.obtain::<CoreClient>().unwrap();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
+    let scopes = depot.obtain::<Vec<Scope>>().unwrap().to_owned();
 
     let token_response = match client
         .exchange_refresh_token(&RefreshToken::new(refresh_token.to_owned()))
+        .add_scopes(scopes) // TODO: Test if required
         .request(http_client)
     {
         Ok(v) => v,
