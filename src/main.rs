@@ -46,7 +46,7 @@ struct OIDCProvider {
     client_id: ClientId,
     client_secret: ClientSecret,
     issuer_url: IssuerUrl,
-    scopes: Vec<String>,
+    scopes: Vec<Scope>,
     jwks: JwkSet,
     audience: Vec<String>,
 }
@@ -94,7 +94,11 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
             client_id: ClientId::new(client_id),
             client_secret: ClientSecret::new(client_secret),
             issuer_url: IssuerUrl::new(issuer_url.to_owned()).expect("Invalid issuer URL"),
-            scopes: scopes.split(',').map(String::from).collect(),
+            scopes: scopes
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(|s| Scope::new(s.trim().to_string()))
+                .collect(),
             audience: audience.split(',').map(String::from).collect(),
             jwks,
         };
@@ -133,12 +137,6 @@ fn get_oauth2_client(req: &mut Request) -> Result<(CoreClient, Vec<Scope>), Stri
     let provider_metadata =
         CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
 
-    let scopes = oidc_provider
-        .scopes
-        .iter()
-        .map(|s| Scope::new(s.to_string()))
-        .collect();
-
     Ok((
         CoreClient::from_provider_metadata(
             provider_metadata,
@@ -149,7 +147,7 @@ fn get_oauth2_client(req: &mut Request) -> Result<(CoreClient, Vec<Scope>), Stri
             RedirectUrl::new(format!("{}://{}/auth_callback", &proto, &hostname).to_string())
                 .expect("Invalid redirect URL"),
         ),
-        scopes,
+        oidc_provider.scopes,
     ))
 }
 
