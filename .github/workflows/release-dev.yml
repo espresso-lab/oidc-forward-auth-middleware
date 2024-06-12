@@ -1,11 +1,9 @@
-name: Build & Push 📦
+name: Build & Push DEV 📦
 
 on:
   push:
     branches:
       - main
-    tags:
-      - "v*"
 
 jobs:
   release:
@@ -56,6 +54,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64 #Only in prod ,linux/arm64
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache
