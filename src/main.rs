@@ -325,25 +325,17 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     jwt_decode::<Claims>(&token, &key, &validation).is_ok()
 }
 
-// TODO: refactor ?
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     let uri = get_header(req, "x-forwarded-uri");
     let csrf_state = get_cookie(req, STATE_COOKIE_NAME);
     let code = get_query_param(&uri, "code");
     let state = get_query_param(&uri, "state");
 
-    if uri.is_empty()
+    return !(uri.is_empty()
         || code.is_empty()
         || state.is_empty()
         || csrf_state.is_empty()
-        || state != csrf_state
-    {
-        return false;
-    }
-
-    let hostname = get_header(req, "x-forwarded-host");
-
-    get_oidc_provider_for_hostname(&hostname).is_some()
+        || state != csrf_state);
 }
 
 #[handler]
