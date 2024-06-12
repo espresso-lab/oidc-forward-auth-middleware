@@ -227,34 +227,34 @@ struct Claims {
     exp: usize,
 }
 
-#[handler]
-async fn renew_access_token(
-    req: &mut Request,
-    res: &mut Response,
-    ctrl: &mut FlowCtrl,
-    depot: &mut Depot,
-) {
+fn has_refresh_token(req: &mut Request, _state: &mut PathState) -> bool {
     let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
 
-    if refresh_token.is_empty() {
-        res.remove_cookie(REFRESH_TOKEN_COOKIE_NAME);
-        info!("ctrl.cease()");
-        ctrl.cease(); // TODO: Check if that works
-                      // else: res.status_code(StatusCode::UNAUTHORIZED);
-        return;
-    }
+    !refresh_token.is_empty()
+}
 
+#[handler]
+async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut Depot) {
+    let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
     let client = depot.obtain::<CoreClient>().unwrap();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
 
     let token_response = match client
-        .exchange_refresh_token(&RefreshToken::new(refresh_token))
+        .exchange_refresh_token(&RefreshToken::new(refresh_token.to_owned()))
         .request(http_client)
     {
         Ok(v) => v,
         Err(err) => {
-            warn!("Error exchanging refresh token: {}", err);
-            ctrl.cease(); // TODO: Check if that works
+            warn!("Error exchanging refresh token {}: {}", &refresh_token, err);
+
+            // If the token is invalid, remove the cookie and try again.
+            // TODO: Directly redirect to forward_auth_handler
+            res.remove_cookie(REFRESH_TOKEN_COOKIE_NAME);
+            res.render(Redirect::temporary(format!(
+                "{}://{}/{}",
+                headers.protocol, headers.host, headers.uri
+            )));
+
             return;
         }
     };
@@ -477,26 +477,22 @@ async fn main() {
         Err(_) => true,
     };
 
-    // Info about enhanced security option
-    info!(
-        "Enhanced security is {}.",
-        if enhanced_security_enabled {
-            "enabled"
-        } else {
-            "disabled"
-        }
-    );
-
     let router = Router::new()
         .push(Router::with_path("/status").get(ok_handler))
         .push(
             Router::with_path("/verify")
                 .hoop(apply_oauth2_client)
-                .hoop_when(apply_security_headers, move |_, _| -> bool {
-                    enhanced_security_enabled.to_owned()
+                .then(|router| {
+                    if enhanced_security_enabled {
+                        info!("Enhanced security is enabled.");
+                        router.hoop(apply_security_headers)
+                    } else {
+                        info!("Enhanced security is disabled.");
+                        router
+                    }
                 })
                 .push(Router::with_filter_fn(check_cookie).goal(ok_handler))
-                .push(Router::new().goal(renew_access_token)) // TODO: Filter needed?
+                .push(Router::with_filter_fn(has_refresh_token).goal(renew_access_token))
                 .push(Router::with_filter_fn(check_params).goal(set_cookie))
                 .push(Router::new().goal(forward_auth_handler)),
         );
