@@ -266,7 +266,12 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
 
     info!("Renewed session");
 
-    res.status_code(StatusCode::NO_CONTENT);
+    res.render(Redirect::temporary(format!(
+        "{}://{}/{}",
+        &headers.protocol, &headers.host, &headers.uri
+    )));
+
+    // res.status_code(StatusCode::NO_CONTENT);
 }
 
 // TODO: Refactor from path check to middleware
