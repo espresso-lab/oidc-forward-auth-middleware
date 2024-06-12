@@ -126,31 +126,6 @@ fn get_oidc_provider_for_hostname(hostname: &str) -> Option<OIDCProvider> {
         .cloned()
 }
 
-fn get_oauth2_client(req: &mut Request) -> Result<(CoreClient, Vec<Scope>), String> {
-    let hostname = get_header(req, "x-forwarded-host");
-    let proto = get_header(req, "x-forwarded-proto");
-    let oidc_provider = match get_oidc_provider_for_hostname(&hostname) {
-        Some(v) => v,
-        None => return Err("No OIDC provider known for hostname.".to_string()),
-    };
-
-    let provider_metadata =
-        CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
-
-    Ok((
-        CoreClient::from_provider_metadata(
-            provider_metadata,
-            oidc_provider.client_id.to_owned(),
-            Some(oidc_provider.client_secret.to_owned()),
-        )
-        .set_redirect_uri(
-            RedirectUrl::new(format!("{}://{}/auth_callback", &proto, &hostname).to_string())
-                .expect("Invalid redirect URL"),
-        ),
-        oidc_provider.scopes,
-    ))
-}
-
 fn get_env(key: &str, default: Option<&str>) -> String {
     env::var(key).unwrap_or_else(|_| default.unwrap_or("").to_owned())
 }
@@ -439,27 +414,46 @@ async fn apply_security_headers(_req: &mut Request, res: &mut Response, depot: &
 
 #[handler]
 async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut Depot) {
-    let (client, scopes) = match get_oauth2_client(req) {
-        Ok(val) => val,
-        Err(err) => {
-            return res
-                .status_code(StatusCode::INTERNAL_SERVER_ERROR)
-                .render(Text::Plain(err));
-        }
-    };
-
-    let protocol = get_header(req, "x-forwarded-proto");
-
-    let forward_auth_headers = ForwardAuthHeaders {
+    let forward_headers = ForwardAuthHeaders {
         host: get_header(req, "x-forwarded-host"),
-        protocol: protocol.to_owned(),
-        https: protocol.to_lowercase().eq("https"),
+        protocol: get_header(req, "x-forwarded-proto").to_owned(),
+        https: get_header(req, "x-forwarded-proto")
+            .to_lowercase()
+            .eq("https"),
         uri: get_header(req, "x-forwarded-uri"),
     };
 
-    depot.inject(forward_auth_headers);
+    let oidc_provider = match get_oidc_provider_for_hostname(&forward_headers.host) {
+        Some(val) => val,
+        None => {
+            return res
+                .status_code(StatusCode::INTERNAL_SERVER_ERROR)
+                .render(Text::Plain("No OIDC provider found for hostname."));
+        }
+    };
+
+    let provider_metadata =
+        CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
+
+    let client = CoreClient::from_provider_metadata(
+        provider_metadata,
+        oidc_provider.client_id.to_owned(),
+        Some(oidc_provider.client_secret.to_owned()),
+    )
+    .set_redirect_uri(
+        RedirectUrl::new(
+            format!(
+                "{}://{}/auth_callback",
+                &forward_headers.protocol, &forward_headers.host
+            )
+            .to_string(),
+        )
+        .expect("Invalid redirect URL"),
+    );
+
+    depot.inject(forward_headers);
     depot.inject(client);
-    depot.inject(scopes);
+    depot.inject(oidc_provider.scopes);
 }
 
 #[tokio::main]
