@@ -18,7 +18,7 @@ use salvo::http::header::{
 use salvo::http::{HeaderValue, StatusCode};
 use salvo::logging::Logger;
 use salvo::prelude::{
-    handler, Depot, FlowCtrl, Redirect, Request, Response, Router, Server, TcpListener, Text,
+    handler, Depot, Redirect, Request, Response, Router, Server, TcpListener, Text,
 };
 use salvo::routing::PathState;
 use salvo::{Listener, Service};
@@ -70,7 +70,7 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
             || client_secret.is_empty()
             || audience.is_empty()
         {
-            debug!("OIDC provider Init: Environment variable set with counter {} is incomplete. Stopping here.", i);
+            debug!("OIDC provider init: Environment variable set with counter {} is incomplete. Stopping here.", i);
             break;
         }
 
@@ -109,7 +109,7 @@ fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
     if providers.len() == 0 {
         warn!("No OIDC providers initialized. Please check environment variables.")
     } else {
-        info!("Initialized {} OIDC provider.", providers.len());
+        info!("Initialized {} OIDC providers.", providers.len());
     }
 
     providers
@@ -235,7 +235,10 @@ fn has_refresh_token(req: &mut Request, _state: &mut PathState) -> bool {
 
 #[handler]
 async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut Depot) {
-    let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
+    let refresh_token = decode(&get_cookie(req, REFRESH_TOKEN_COOKIE_NAME))
+        .unwrap()
+        .to_string();
+
     let client = depot.obtain::<CoreClient>().unwrap();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
 
@@ -245,7 +248,8 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
     {
         Ok(v) => v,
         Err(err) => {
-            warn!("Error exchanging refresh token {}: {}", &refresh_token, err);
+            debug!("Refresh token: {}", &refresh_token);
+            warn!("Error exchanging refresh token: {}", err);
 
             // If the token is invalid, remove the cookie and try again.
             // TODO: Directly redirect to forward_auth_handler
@@ -289,11 +293,6 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
 
     res.status_code(StatusCode::NO_CONTENT);
 }
-
-// // TODO: Needed?
-// fn check_refresh_token_cookie(req: &mut Request, _state: &mut PathState) -> bool {
-//     !get_cookie(req, REFRESH_TOKEN_COOKIE_NAME).is_empty()
-// }
 
 // TODO: Refactor from path check to middleware
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
@@ -387,13 +386,8 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
         .request(http_client)
         .unwrap();
 
-    let access_token = decode(&token_response.access_token().secret())
-        .unwrap()
-        .into_owned();
-
-    let refresh_token = decode(&token_response.refresh_token().unwrap().secret())
-        .unwrap()
-        .into_owned();
+    let access_token = token_response.access_token().secret().to_owned();
+    let refresh_token = token_response.refresh_token().unwrap().secret().to_owned();
 
     res.add_cookie(
         Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token))
