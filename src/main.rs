@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::str::from_utf8;
 
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode as jwt_decode, decode_header, DecodingKey, Validation};
@@ -10,6 +11,8 @@ use openidconnect::{
     AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
     OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
 };
+extern crate base64;
+use salvo::http::cookie::time::OffsetDateTime;
 use salvo::http::cookie::Cookie;
 use salvo::http::header::{
     REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
@@ -23,6 +26,7 @@ use salvo::prelude::{
 use salvo::routing::PathState;
 use salvo::{Listener, Service};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 use urlencoding::decode;
@@ -200,6 +204,28 @@ struct Claims {
     exp: usize,
 }
 
+fn get_jwt_expiry(token: &str) -> Result<OffsetDateTime, &str> {
+    let jwt_json = token
+        .split(".")
+        .nth(1)
+        .map(|s| base64::decode(s).unwrap())
+        .map(|bytes| from_utf8(&bytes).unwrap().to_owned());
+
+    if jwt_json.is_none() {
+        return Err("jwt json is none.");
+    }
+
+    let v: Value = serde_json::from_str(&jwt_json.unwrap()).unwrap();
+
+    if !v["exp"].is_number() {
+        return Err("No expiry set.");
+    }
+
+    let expiration_timestamp = v["exp"].as_i64().unwrap();
+
+    return Ok(OffsetDateTime::from_unix_timestamp(expiration_timestamp).unwrap());
+}
+
 fn has_refresh_token(req: &mut Request, _state: &mut PathState) -> bool {
     let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
 
@@ -231,7 +257,9 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
             res.remove_cookie(REFRESH_TOKEN_COOKIE_NAME);
             res.render(Redirect::temporary(format!(
                 "{}://{}/{}",
-                headers.protocol, headers.host, headers.uri
+                headers.protocol,
+                headers.host,
+                headers.uri.trim_start_matches("/")
             )));
 
             return;
@@ -251,9 +279,10 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
     }
 
     res.add_cookie(
-        Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token))
+        Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token.to_owned()))
             .secure(headers.https)
             .http_only(true)
+            .expires(get_jwt_expiry(&access_token.as_str()).unwrap())
             .build(),
     );
 
@@ -264,14 +293,12 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
             .build(),
     );
 
-    info!("Renewed session");
-
     res.render(Redirect::temporary(format!(
         "{}://{}/{}",
-        &headers.protocol, &headers.host, &headers.uri
+        &headers.protocol,
+        &headers.host,
+        &headers.uri.trim_start_matches("/")
     )));
-
-    // res.status_code(StatusCode::NO_CONTENT);
 }
 
 // TODO: Refactor from path check to middleware
@@ -404,7 +431,8 @@ async fn apply_security_headers(_req: &mut Request, res: &mut Response, depot: &
 
         res.render(Redirect::temporary(format!(
             "https://{}/{}",
-            auth_headers.host, auth_headers.uri
+            auth_headers.host,
+            auth_headers.uri.trim_start_matches("/")
         )));
     }
 }
