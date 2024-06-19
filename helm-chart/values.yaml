@@ -1,0 +1,53 @@
+replicaCount: 1
+
+# TODO: Deamon mode to have at least one pod per server?
+
+image:
+  repository: ghcr.io/espresso-lab/oidc-forward-auth-middleware
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+
+securityContext: {}
+
+service:
+  type: ClusterIP
+  port: 3000
+
+resources: {}
+
+config:
+  sessionCookieName: x_forward_auth_session
+  logLevel: info # debug, info, warn, error
+  disableEnhancedSecurity: "false" # Enhanced security sets HTTP security headers and forces https
+
+oidcProviders:
+  # - ingressHostname: example.com
+  #   issuerUrl: https://id.example.com/oauth/app1
+  #   clientId: app1
+  #   clientSecret: mysecretpassword
+  #   scopes: ["email", "profile"]
+  #   existingSecret: oidc-config # Provide a secret with fields clientId, clientSecret
+  #   audience: ["app1"]
+
+extraEnvVars:
+  # - name: EXAMPLE_ENV
+  #   value: ABCD
+
+volumes: []
+
+volumeMounts: []
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

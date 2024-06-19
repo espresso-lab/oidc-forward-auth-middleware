@@ -48,7 +48,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push container image
         uses: docker/build-push-action@v5
         with:
           push: true
@@ -57,3 +57,18 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache
+
+      - name: Build and push Helm Chart
+        run: |
+          if [[ $GITHUB_REF_NAME != v* ]]; then
+            exit 0
+          fi
+          mkdir -p .helm-packages
+          HELM_VERSION="${GITHUB_REF_NAME#v}"
+          helm package ./helm-chart --version "$HELM_VERSION"" --app-version "$GITHUB_REF_NAME" -d .helm-packages
+          for pkg in .helm-packages/*; do
+            if [ -z "${pkg:-}" ]; then
+              break
+            fi
+            helm push "${pkg}" oci://ghcr.io/${{ github.repository }}
+          done

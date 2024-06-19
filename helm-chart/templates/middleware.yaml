@@ -1,0 +1,11 @@
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: oidc-forward-auth-middleware
+  namespace: kube-system
+spec:
+  forwardAuth:
+    address: "http://oidc-forward-auth-middleware.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/verify"
+    authResponseHeaders: ["Set-Cookie", "Location"]
+    authRequestHeaders: ["Cookie"]
+    trustForwardHeader: true

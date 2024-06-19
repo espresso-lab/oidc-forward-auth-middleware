@@ -1,0 +1,8 @@
+apiVersion: v2
+name: oidc-forward-auth-middleware
+description: A Helm chart for Kubernetes
+type: application
+
+# Overwritten by build script to current tag
+version: "0"
+appVersion: "0"

@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "oidc-forward-auth-middleware.fullname" . }}
+  labels:
+    {{- include "oidc-forward-auth-middleware.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "oidc-forward-auth-middleware.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "oidc-forward-auth-middleware.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: FORWARD_AUTH_COOKIE
+              value: "{{ .Values.config.sessionCookieName }}"
+            - name: RUST_LOG
+              value: "{{ .Values.config.logLevel }}"
+            - name: DISABLE_ENHANCED_SECURITY
+              value: "{{ .Values.config.disableEnhancedSecurity }}"
+            {{- range $i, $value := .Values.oidcProviders }}
+            - name: "OIDC_PROVIDER_{{ $i }}_HOSTNAME"
+              value: "{{ $value.ingressHostname }}"
+            - name: "OIDC_PROVIDER_{{ $i }}_ISSUER_URL"
+              value: "{{ $value.issuerUrl }}"
+            {{- if $value.existingSecret }}
+            - name: "OIDC_PROVIDER_{{ $i }}_CLIENT_ID"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $value.existingSecret }}
+                  key: clientId
+            - name: "OIDC_PROVIDER_{{ $i }}_CLIENT_SECRET"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $value.existingSecret }}
+                  key: clientSecret
+            {{- else }}
+            - name: "OIDC_PROVIDER_{{ $i }}_CLIENT_ID"
+              value: "{{ $value.clientId }}"
+            - name: "OIDC_PROVIDER_{{ $i }}_CLIENT_SECRET"
+              value: "{{ $value.clientSecret }}"
+            {{- end }}
+            - name: "OIDC_PROVIDER_{{ $i }}_SCOPES"
+              value: {{ join "," $value.scopes }}
+            - name: "OIDC_PROVIDER_{{ $i }}_AUDIENCE"
+              value: {{ join "," $value.audience }}
+            {{- end }}
+            {{- if .Values.extraEnvVars }}
+            {{- toYaml .Values.extraEnvVars | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: {{ .Values.service.port }}
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: {{ .Values.service.port }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
