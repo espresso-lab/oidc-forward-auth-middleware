@@ -65,7 +65,7 @@ jobs:
           fi
           mkdir -p .helm-packages
           HELM_VERSION="${GITHUB_REF_NAME#v}"
-          helm package ./helm-chart --version "$HELM_VERSION"" --app-version "$GITHUB_REF_NAME" -d .helm-packages
+          helm package ./helm-chart --version "$HELM_VERSION" --app-version "$GITHUB_REF_NAME" -d .helm-packages
           for pkg in .helm-packages/*; do
             if [ -z "${pkg:-}" ]; then
               break
