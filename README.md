@@ -18,15 +18,12 @@ This container acts as a `ForwardAuth` middleware for the traefik ingress contro
 
 ### Usage in Kubernetes / Helm
 
-Let's say you have a service called `app.example.com` you would like to protect with the OIDC middleware.
-Your OIDC provider in the example is `id.example.com`.
+Let's say you have a service called `app.example.com` you would like to protect with the OIDC middleware. Your OIDC provider in this example is `id.example.com`.
 
 First, install the `oidc-forward-auth-middleware` Helm chart:
 
 ```
-helm repo add espresso-lab https://espresso-lab.github.io/helm-charts
-
-helm upgrade --install oidc-forward-auth-middleware espresso-lab/oidc-forward-auth-middleware --namespace=auth
+helm install oci://ghcr.io/espresso-lab/helm-charts/oidc-forward-auth-middleware
 ```
 
 The Helm values could look like the following:
@@ -61,9 +58,8 @@ ingress:
     traefik.ingress.kubernetes.io/router.middlewares: kube-system-oidc-forward-auth-middleware@kubernetescrd
 ```
 
-**That's it! :)**
 
-### Useage in Docker Compose
+### Usage in Docker Compose
 
 For the latest example have a look at the `docker-compose.yml` file.
 
