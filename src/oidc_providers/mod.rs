@@ -46,11 +46,10 @@ impl OIDCProviders {
             let scopes = env::var(&format!("OIDC_PROVIDER_{}_SCOPES", i));
             let audience = env::var(&format!("OIDC_PROVIDER_{}_AUDIENCE", i));
 
-            if hostname.clone().is_ok_and(|h| !h.is_empty())
-                && issuer_url.clone().is_ok_and(|h| !h.is_empty())
-                || client_id.clone().is_ok_and(|h| !h.is_empty())
-                || client_secret.clone().is_ok_and(|h| !h.is_empty())
-                || audience.clone().is_ok_and(|h| !h.is_empty())
+            if hostname.clone().is_err() && issuer_url.clone().is_err()
+                || client_id.clone().is_err()
+                || client_secret.clone().is_err()
+                || audience.clone().is_err()
             {
                 debug!("OIDC provider init: Environment variable set with counter {} is incomplete. Stopping here.", i);
                 break;

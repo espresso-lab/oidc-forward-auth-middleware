@@ -7,7 +7,7 @@ use std::str::from_utf8;
 use base64::prelude::*;
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode as jwt_decode, decode_header, DecodingKey, Validation};
-use oidc_providers::OIDCProviders;
+use oidc_providers::{OIDCProvider, OIDCProviders};
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
@@ -248,7 +248,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
 
     debug!("Received cookie value: {}", &token);
 
-    let oidc_provider = match PROVIDERS.get().unwrap().find_by_hostname(&hostname) {
+    let oidc_provider = match get_oidc_provider_for_hostname(&hostname) {
         Some(val) => val,
         None => {
             debug!("OIDC provider not found for hostname {}.", &hostname);
@@ -398,11 +398,7 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
         uri: get_header(req, "x-forwarded-uri"),
     };
 
-    let oidc_provider = match PROVIDERS
-        .get()
-        .unwrap()
-        .find_by_hostname(&forward_headers.host)
-    {
+    let oidc_provider = match get_oidc_provider_for_hostname(&forward_headers.host) {
         Some(val) => val,
         None => {
             return res
@@ -435,19 +431,23 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
     depot.inject(oidc_provider.scopes.clone());
 }
 
+fn get_oidc_provider_for_hostname(hostname: &str) -> Option<&OIDCProvider> {
+    PROVIDERS
+        .get_or_init(|| OIDCProviders::new())
+        .find_by_hostname(&hostname)
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    PROVIDERS.get_or_init(|| OIDCProviders::new());
-
-    let enhanced_security_enabled: bool = match env::var("DISABLE_ENHANCED_SECURITY") {
+    let enhanced_security_enabled = match env::var("DISABLE_ENHANCED_SECURITY") {
         Ok(val) => !(val.to_lowercase().eq("true") || val.eq("1")),
         Err(_) => true,
     };
 
     let router = Router::new()
-        .push(Router::with_path("/status").get(status_handler))
+        .push(Router::with_path("/status").goal(status_handler))
         .push(
             Router::with_path("/verify")
                 .hoop(apply_oauth2_client)
