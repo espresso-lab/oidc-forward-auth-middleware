@@ -1,15 +1,19 @@
+mod oidc_providers;
+
 use std::collections::HashMap;
 use std::env;
 use std::str::from_utf8;
 
+use base64::prelude::*;
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode as jwt_decode, decode_header, DecodingKey, Validation};
+use oidc_providers::OIDCProviders;
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
 use openidconnect::url::Url;
 use openidconnect::{
-    AuthenticationFlow, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
+    AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
 };
 extern crate base64;
 use salvo::http::cookie::time::OffsetDateTime;
@@ -31,7 +35,7 @@ use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 use urlencoding::decode;
 
-static PROVIDERS: OnceLock<HashMap<String, OIDCProvider>> = OnceLock::new();
+static PROVIDERS: OnceLock<OIDCProviders> = OnceLock::new();
 static ACCESS_TOKEN_COOKIE_NAME: &str = "x_oidc_access_token";
 static REFRESH_TOKEN_COOKIE_NAME: &str = "x_oidc_refresh_token";
 static STATE_COOKIE_NAME: &str = "x_oidc_csrf";
@@ -43,95 +47,6 @@ struct ForwardAuthHeaders {
     protocol: String,
     host: String,
     uri: String,
-}
-
-#[derive(Clone, Debug)]
-struct OIDCProvider {
-    client_id: ClientId,
-    client_secret: ClientSecret,
-    issuer_url: IssuerUrl,
-    scopes: Vec<Scope>,
-    jwks: JwkSet,
-    audience: Vec<String>,
-}
-
-fn get_oidc_providers() -> HashMap<String, OIDCProvider> {
-    let mut providers = HashMap::new();
-
-    info!("Starting to initialize OIDC providers.");
-
-    for i in 0u32.. {
-        let hostname = get_env(&format!("OIDC_PROVIDER_{}_HOSTNAME", i), None).to_lowercase();
-        let issuer_url = get_env(&format!("OIDC_PROVIDER_{}_ISSUER_URL", i), None);
-        let client_id = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_ID", i), None);
-        let client_secret = get_env(&format!("OIDC_PROVIDER_{}_CLIENT_SECRET", i), None);
-        let scopes = get_env(&format!("OIDC_PROVIDER_{}_SCOPES", i), None);
-        let audience = get_env(&format!("OIDC_PROVIDER_{}_AUDIENCE", i), None);
-
-        if hostname.is_empty()
-            || issuer_url.is_empty()
-            || client_id.is_empty()
-            || client_secret.is_empty()
-            || audience.is_empty()
-        {
-            debug!("OIDC provider init: Environment variable set with counter {} is incomplete. Stopping here.", i);
-            break;
-        }
-
-        let provider_metadata = CoreProviderMetadata::discover(
-            &IssuerUrl::new(issuer_url.to_owned()).expect("Invalid issuer URL"),
-            http_client,
-        )
-        .unwrap();
-
-        let jwks: JwkSet = reqwest::blocking::Client::builder()
-            .use_rustls_tls()
-            .build()
-            .unwrap()
-            .get(&provider_metadata.jwks_uri().url().to_string())
-            .send()
-            .unwrap()
-            .json()
-            .unwrap();
-
-        let oidc_provider = OIDCProvider {
-            client_id: ClientId::new(client_id),
-            client_secret: ClientSecret::new(client_secret),
-            issuer_url: IssuerUrl::new(issuer_url.to_owned()).expect("Invalid issuer URL"),
-            scopes: scopes
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .map(|s| Scope::new(s.trim().to_string()))
-                .collect(),
-            audience: audience.split(',').map(String::from).collect(),
-            jwks,
-        };
-
-        debug!("OIDC provider details: {:?}", &oidc_provider);
-
-        providers.insert(hostname.to_owned(), oidc_provider);
-
-        info!("Added OIDC provider: {} -> {}", &hostname, &issuer_url);
-    }
-
-    if providers.len() == 0 {
-        warn!("No OIDC providers initialized. Please check environment variables.")
-    } else {
-        info!("Initialized {} OIDC providers.", providers.len());
-    }
-
-    providers
-}
-
-fn get_oidc_provider_for_hostname(hostname: &str) -> Option<OIDCProvider> {
-    PROVIDERS
-        .get_or_init(|| get_oidc_providers())
-        .get(&hostname.to_lowercase())
-        .cloned()
-}
-
-fn get_env(key: &str, default: Option<&str>) -> String {
-    env::var(key).unwrap_or_else(|_| default.unwrap_or("").to_owned())
 }
 
 fn get_header(req: &Request, key: &str) -> String {
@@ -208,7 +123,7 @@ fn get_jwt_expiry(token: &str) -> Result<OffsetDateTime, &str> {
     let jwt_json = token
         .split(".")
         .nth(1)
-        .map(|s| base64::decode(s).unwrap())
+        .map(|s| BASE64_STANDARD.decode(s).unwrap())
         .map(|bytes| from_utf8(&bytes).unwrap().to_owned());
 
     if jwt_json.is_none() {
@@ -313,7 +228,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
 
     debug!("Received cookie value: {}", &token);
 
-    let oidc_provider = match get_oidc_provider_for_hostname(&hostname) {
+    let oidc_provider = match PROVIDERS.get().unwrap().find_by_hostname(&hostname) {
         Some(val) => val,
         None => {
             debug!("OIDC provider not found for hostname {}.", &hostname);
@@ -332,7 +247,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let key_id = header.kid.unwrap();
     debug!("Token JWK Key ID: {}", &key_id);
 
-    let jwks: JwkSet = oidc_provider.jwks;
+    let jwks: JwkSet = oidc_provider.clone().jwks;
     let jwk: &jsonwebtoken::jwk::Jwk = match jwks.keys.iter().find(|k| {
         k.common
             .key_id
@@ -346,8 +261,8 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let key = DecodingKey::from_jwk(&jwk).unwrap();
     let mut validation = Validation::new(header.alg);
 
-    validation.set_audience(&oidc_provider.audience);
-    validation.set_issuer(&vec![oidc_provider.issuer_url.as_str()]);
+    validation.set_audience(&oidc_provider.audience.clone());
+    validation.set_issuer(&vec![oidc_provider.issuer_url.clone().as_str()]);
 
     jwt_decode::<Claims>(&token, &key, &validation).is_ok()
 }
@@ -448,7 +363,11 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
         uri: get_header(req, "x-forwarded-uri"),
     };
 
-    let oidc_provider = match get_oidc_provider_for_hostname(&forward_headers.host) {
+    let oidc_provider = match PROVIDERS
+        .get()
+        .unwrap()
+        .find_by_hostname(&forward_headers.host)
+    {
         Some(val) => val,
         None => {
             return res
@@ -458,7 +377,7 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
     };
 
     let provider_metadata =
-        CoreProviderMetadata::discover(&oidc_provider.issuer_url, http_client).unwrap();
+        CoreProviderMetadata::discover(&oidc_provider.clone().issuer_url, http_client).unwrap();
 
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
@@ -476,14 +395,16 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
         .expect("Invalid redirect URL"),
     );
 
-    depot.inject(forward_headers);
+    depot.inject(forward_headers.clone());
     depot.inject(client);
-    depot.inject(oidc_provider.scopes);
+    depot.inject(oidc_provider.scopes.clone());
 }
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
+
+    PROVIDERS.get_or_init(|| OIDCProviders::new());
 
     let enhanced_security_enabled: bool = match env::var("DISABLE_ENHANCED_SECURITY") {
         Ok(val) => !(val.to_lowercase().eq("true") || val.eq("1")),
