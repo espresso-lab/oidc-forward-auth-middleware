@@ -139,28 +139,6 @@ async fn ok_handler(req: &mut Request, res: &mut Response) {
     res.status_code(StatusCode::NO_CONTENT);
 }
 
-fn get_jwt_expiry(token: &str) -> Result<OffsetDateTime, &str> {
-    let jwt_json = token
-        .split(".")
-        .nth(1)
-        .map(|s| BASE64_STANDARD.decode(s).unwrap())
-        .map(|bytes| from_utf8(&bytes).unwrap().to_owned());
-
-    if jwt_json.is_none() {
-        return Err("jwt json is none.");
-    }
-
-    let v: Value = serde_json::from_str(&jwt_json.unwrap()).unwrap();
-
-    if !v["exp"].is_number() {
-        return Err("No expiry set.");
-    }
-
-    let expiration_timestamp = v["exp"].as_i64().unwrap();
-
-    return Ok(OffsetDateTime::from_unix_timestamp(expiration_timestamp).unwrap());
-}
-
 fn has_refresh_token(req: &mut Request, _state: &mut PathState) -> bool {
     let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
 
@@ -217,7 +195,6 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
         Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token.to_owned()))
             .secure(headers.https)
             .http_only(true)
-            .expires(get_jwt_expiry(&access_token.as_str()).unwrap())
             .build(),
     );
 
