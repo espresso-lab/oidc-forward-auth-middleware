@@ -22,7 +22,7 @@ openidconnect = { version = "3", features = [
     "reqwest",
     "rustls-tls",
 ], default-features = false }
-salvo = { version = "0", features = [
+salvo = { version = "0.68", features = [
     "cookie",
     "server",
     "quinn",
