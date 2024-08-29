@@ -6,6 +6,6 @@ metadata:
 spec:
   forwardAuth:
     address: "http://oidc-forward-auth-middleware.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/verify"
-    authResponseHeaders: ["Set-Cookie", "Location"]
+    authResponseHeaders: ["Set-Cookie", "Location", "X-Forwarded-User"]
     authRequestHeaders: ["Cookie"]
     trustForwardHeader: true

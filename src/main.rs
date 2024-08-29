@@ -109,7 +109,7 @@ async fn forward_auth_handler(_req: &mut Request, res: &mut Response, depot: &mu
 }
 
 #[handler]
-async fn ok_handler(res: &mut Response) {
+async fn status_handler(res: &mut Response) {
     res.status_code(StatusCode::NO_CONTENT);
 }
 
@@ -117,6 +117,26 @@ async fn ok_handler(res: &mut Response) {
 struct Claims {
     sub: String,
     exp: usize,
+}
+
+#[handler]
+async fn ok_handler(req: &mut Request, res: &mut Response) {
+    let headers = res.headers_mut();
+    let sub_header = req.headers().get("X-Forwarded-User");
+
+    // Depot would be better, but check_cookie middleware does not support it
+    // TODO: Fix with actix migration
+
+    if sub_header.is_some() {
+        debug!(
+            "X-Forwarded-User: {}",
+            &sub_header.clone().unwrap().to_str().unwrap()
+        );
+
+        headers.insert("X-Forwarded-User", sub_header.unwrap().to_owned());
+    }
+
+    res.status_code(StatusCode::NO_CONTENT);
 }
 
 fn get_jwt_expiry(token: &str) -> Result<OffsetDateTime, &str> {
@@ -264,7 +284,22 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     validation.set_audience(&oidc_provider.audience.clone());
     validation.set_issuer(&vec![oidc_provider.issuer_url.clone().as_str()]);
 
-    jwt_decode::<Claims>(&token, &key, &validation).is_ok()
+    let claims = jwt_decode::<Claims>(&token, &key, &validation);
+
+    if !claims.is_ok() {
+        return false;
+    }
+
+    let sub = claims.unwrap().claims.sub;
+
+    // Does not work in PathFilter :/
+    // depot.inject::<Claims>(myclaims);
+
+    // So we pass it via the request header
+    let headers = req.headers_mut();
+    headers.insert("X-Forwarded-User", HeaderValue::from_str(&sub).unwrap());
+
+    return true;
 }
 
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
@@ -412,7 +447,7 @@ async fn main() {
     };
 
     let router = Router::new()
-        .push(Router::with_path("/status").get(ok_handler))
+        .push(Router::with_path("/status").get(status_handler))
         .push(
             Router::with_path("/verify")
                 .hoop(apply_oauth2_client)
