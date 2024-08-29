@@ -16,7 +16,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
-base64 = "*"
 urlencoding = "*"
 openidconnect = { version = "3", features = [
     "reqwest",
@@ -30,7 +29,6 @@ salvo = { version = "0.68", features = [
 ], default-features = false }
 tokio = { version = "1", features = ["macros"], default-features = false }
 jsonwebtoken = { version = "9", default-features = false }
-serde_json = "1"
 reqwest = { version = "0", features = [
     "json",
     "blocking",

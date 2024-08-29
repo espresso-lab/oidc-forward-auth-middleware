@@ -1,10 +1,5 @@
 mod oidc_providers;
 
-use std::collections::HashMap;
-use std::env;
-use std::str::from_utf8;
-
-use base64::prelude::*;
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode as jwt_decode, decode_header, DecodingKey, Validation};
 use oidc_providers::{OIDCProvider, OIDCProviders};
@@ -15,8 +10,6 @@ use openidconnect::{
     AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
 };
-extern crate base64;
-use salvo::http::cookie::time::OffsetDateTime;
 use salvo::http::cookie::Cookie;
 use salvo::http::header::{
     REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
@@ -30,7 +23,8 @@ use salvo::prelude::{
 use salvo::routing::PathState;
 use salvo::{Listener, Service};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use std::collections::HashMap;
+use std::env;
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 use urlencoding::decode;
