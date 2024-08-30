@@ -403,9 +403,7 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
 }
 
 fn get_oidc_provider_for_hostname(hostname: &str) -> Option<&OIDCProvider> {
-    PROVIDERS
-        .get_or_init(|| OIDCProviders::new())
-        .find_by_hostname(&hostname)
+    PROVIDERS.get().unwrap().find_by_hostname(&hostname)
 }
 
 #[tokio::main]
@@ -416,6 +414,10 @@ async fn main() {
         Ok(val) => !(val.to_lowercase().eq("true") || val.eq("1")),
         Err(_) => true,
     };
+
+    let oidc_providers = OIDCProviders::new().await;
+
+    PROVIDERS.get_or_init(move || oidc_providers);
 
     let router = Router::new()
         .push(Router::with_path("/status").goal(status_handler))
