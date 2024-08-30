@@ -1,20 +1,16 @@
 mod oidc_providers;
+mod salvo_utils;
 
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode as jwt_decode, decode_header, DecodingKey, Validation};
-use oidc_providers::{OIDCProvider, OIDCProviders};
+use oidc_providers::OIDCProviders;
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::reqwest::http_client;
-use openidconnect::url::Url;
 use openidconnect::{
     AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
 };
 use salvo::http::cookie::Cookie;
-use salvo::http::header::{
-    REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
-    X_XSS_PROTECTION,
-};
 use salvo::http::{HeaderValue, StatusCode};
 use salvo::logging::Logger;
 use salvo::prelude::{
@@ -22,8 +18,8 @@ use salvo::prelude::{
 };
 use salvo::routing::PathState;
 use salvo::{Listener, Service};
+use salvo_utils::{get_cookie, get_header, get_query_param, security_middleware};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::env;
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
@@ -41,30 +37,6 @@ struct ForwardAuthHeaders {
     protocol: String,
     host: String,
     uri: String,
-}
-
-fn get_header(req: &Request, key: &str) -> String {
-    req.headers()
-        .get(key)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn get_query_param(querystring: &str, key: &str) -> String {
-    let hash_query: HashMap<String, String> =
-        Url::parse(&format!("https://whatever{}", querystring))
-            .unwrap()
-            .query_pairs()
-            .into_owned()
-            .collect();
-    hash_query.get(key).unwrap_or(&"".to_string()).to_owned()
-}
-
-fn get_cookie(req: &Request, key: &str) -> String {
-    req.cookie(key)
-        .map(|cookie| cookie.value().to_string())
-        .unwrap_or_else(|| "".to_string())
 }
 
 #[handler]
@@ -219,7 +191,7 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
 
     debug!("Received cookie value: {}", &token);
 
-    let oidc_provider = match get_oidc_provider_for_hostname(&hostname) {
+    let oidc_provider = match PROVIDERS.get().unwrap().find_by_hostname(&hostname) {
         Some(val) => val,
         None => {
             debug!("OIDC provider not found for hostname {}.", &hostname);
@@ -334,31 +306,6 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
 }
 
 #[handler]
-async fn apply_security_headers(_req: &mut Request, res: &mut Response, depot: &mut Depot) {
-    let auth_headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
-    let headers = res.headers_mut();
-
-    headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
-    headers.insert(
-        STRICT_TRANSPORT_SECURITY,
-        HeaderValue::from_static("max-age=63072000; includeSubDomains"),
-    );
-    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("noopen"));
-    headers.insert(X_XSS_PROTECTION, HeaderValue::from_static("1; mode=block"));
-    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
-
-    if !auth_headers.https {
-        debug!("Redirecting client to HTTPS.");
-
-        res.render(Redirect::temporary(format!(
-            "https://{}/{}",
-            auth_headers.host,
-            auth_headers.uri.trim_start_matches("/")
-        )));
-    }
-}
-
-#[handler]
 async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut Depot) {
     let forward_headers = ForwardAuthHeaders {
         host: get_header(req, "x-forwarded-host"),
@@ -369,7 +316,11 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
         uri: get_header(req, "x-forwarded-uri"),
     };
 
-    let oidc_provider = match get_oidc_provider_for_hostname(&forward_headers.host) {
+    let oidc_provider = match PROVIDERS
+        .get()
+        .unwrap()
+        .find_by_hostname(&forward_headers.host)
+    {
         Some(val) => val,
         None => {
             return res
@@ -402,10 +353,6 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
     depot.inject(oidc_provider.scopes.clone());
 }
 
-fn get_oidc_provider_for_hostname(hostname: &str) -> Option<&OIDCProvider> {
-    PROVIDERS.get().unwrap().find_by_hostname(&hostname)
-}
-
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
@@ -416,7 +363,6 @@ async fn main() {
     };
 
     let oidc_providers = OIDCProviders::new().await;
-
     PROVIDERS.get_or_init(move || oidc_providers);
 
     let router = Router::new()
@@ -427,7 +373,7 @@ async fn main() {
                 .then(|router| {
                     if enhanced_security_enabled {
                         info!("Enhanced security is enabled.");
-                        router.hoop(apply_security_headers)
+                        router.hoop(security_middleware)
                     } else {
                         info!("Enhanced security is disabled.");
                         router
