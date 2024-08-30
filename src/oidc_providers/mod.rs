@@ -137,7 +137,7 @@ impl OIDCProviders {
         if env::var("KUBERNETES_SERVICE_HOST").is_err() {
             return Ok(());
         } else {
-            info!("Running k8s ingres discovery");
+            info!("Running k8s ingress discovery");
         }
 
         let client = Client::try_default().await?;
