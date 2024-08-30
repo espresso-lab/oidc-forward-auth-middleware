@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: oidc-forward-auth-middleware
+  name: {{ include "oidc-forward-auth-middleware.fullname" . }}
 spec:
   type: {{ .Values.service.type }}
   ports:
