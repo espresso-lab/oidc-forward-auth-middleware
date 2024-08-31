@@ -32,7 +32,7 @@ impl K8sIngressProvider {
                 .annotations
                 .as_ref()
                 .and_then(|annotations| {
-                    annotations.get("oidc.ingress.kubernetes.io/oidc-forward-auth-enabled")
+                    annotations.get("oidc.ingress.kubernetes.io/forward-auth-enabled")
                 })
                 .is_some()
         });
@@ -60,7 +60,7 @@ impl K8sIngressProvider {
             // TODO: Get client-secret from k8s secret
             let client_id: String;
             let client_secret: String;
-            let oidc_secret = annotations.get("oidc.ingress.kubernetes.io/oidc-existing-secret");
+            let oidc_secret = annotations.get("oidc.ingress.kubernetes.io/existing-secret");
 
             if oidc_secret.is_some() {
                 info!(
@@ -76,9 +76,9 @@ impl K8sIngressProvider {
 
                 if let Some(data) = secret.data {
                     client_id =
-                        String::from_utf8(data.get("client_id").unwrap().0.to_owned()).unwrap();
+                        String::from_utf8(data.get("client-id").unwrap().0.to_owned()).unwrap();
                     client_secret =
-                        String::from_utf8(data.get("client_secret").unwrap().0.to_owned()).unwrap();
+                        String::from_utf8(data.get("client-secret").unwrap().0.to_owned()).unwrap();
 
                     info!("Found client_id {} and {}.", &client_id, &client_secret);
                 } else {
@@ -87,12 +87,12 @@ impl K8sIngressProvider {
                 }
             } else {
                 client_id = annotations
-                    .get("oidc.ingress.kubernetes.io/oidc-client-id")
+                    .get("oidc.ingress.kubernetes.io/client-id")
                     .unwrap()
                     .to_owned();
 
                 client_secret = annotations
-                    .get("oidc.ingress.kubernetes.io/oidc-client-secret")
+                    .get("oidc.ingress.kubernetes.io/client-secret")
                     .unwrap()
                     .to_owned();
             }
@@ -102,15 +102,15 @@ impl K8sIngressProvider {
                 client_id,
                 client_secret,
                 issuer_url: annotations
-                    .get("oidc.ingress.kubernetes.io/oidc-issuer-url")
+                    .get("oidc.ingress.kubernetes.io/issuer-url")
                     .unwrap()
                     .to_owned(),
                 scopes: annotations
-                    .get("oidc.ingress.kubernetes.io/oidc-scopes")
+                    .get("oidc.ingress.kubernetes.io/scopes")
                     .unwrap()
                     .to_owned(),
                 audience: annotations
-                    .get("oidc.ingress.kubernetes.io/oidc-audience")
+                    .get("oidc.ingress.kubernetes.io/audience")
                     .unwrap()
                     .to_owned(),
             });
