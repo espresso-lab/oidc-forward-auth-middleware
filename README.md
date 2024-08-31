@@ -6,6 +6,14 @@
 
 This container acts as a `ForwardAuth` middleware for the traefik ingress controller that provides OpenID Connect (OIDC) authorization.
 
+- [Features](#features)
+- [Getting Started](#getting-started)
+- [Architecture](#architecture)
+- [Configuration](#configuration)
+- [License](#license)
+
+---
+
 ## Features
 
 - Blazing fast ⚡️ and written in Rust ⚙️
@@ -18,9 +26,9 @@ This container acts as a `ForwardAuth` middleware for the traefik ingress contro
 
 - Added the HTTP header `X-Forwarded-User` containing the jwt user sub. Your backend can directly consume that header to get the user id without the need to encrypt or validate jwt tokens.
 
-## Usage
+## Getting started
 
-### Usage in Kubernetes / Helm
+### Getting started with Kubernetes / Helm
 
 Let's say you have a service called `app.example.com` you would like to protect with the OIDC middleware. Your OIDC provider in this example is `id.example.com`.
 
@@ -63,7 +71,7 @@ ingress:
 ```
 
 
-### Usage in Docker Compose
+### Getting started with Docker Compose
 
 For the latest example have a look at the `docker-compose.yml` file.
 
