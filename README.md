@@ -14,6 +14,10 @@ This container acts as a `ForwardAuth` middleware for the traefik ingress contro
 - Easy to deploy to a Kubernetes environment via Helm or to use it with Docker Compose
 - Simple configuration via environment variables or Helm values
 
+### New features in version 3
+
+- Added the HTTP header `X-Forwarded-User` containing the jwt user sub. Your backend can directly consume that header to get the user id without the need to encrypt or validate jwt tokens.
+
 ## Usage
 
 ### Usage in Kubernetes / Helm
