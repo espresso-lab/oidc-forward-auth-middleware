@@ -1,14 +1,11 @@
+mod k8s_ingress_providers;
+
 use std::{collections::HashMap, env};
 
 use jsonwebtoken::jwk::JwkSet;
-use k8s_openapi::api::networking::v1::Ingress;
-use kube::{
-    api::{Api, ListParams},
-    runtime::reflector::Lookup,
-    Client, Error,
-};
+use k8s_ingress_providers::K8sIngressProvider;
+use kube::Error;
 use openidconnect::core::CoreProviderMetadata;
-// use openidconnect::reqwest::http_client;
 use openidconnect::reqwest::async_http_client;
 use openidconnect::{ClientId, ClientSecret, IssuerUrl, Scope};
 use tracing::{debug, info, warn};
@@ -83,7 +80,7 @@ impl OIDCProviders {
     }
 
     async fn load_from_env(&mut self) -> () {
-        info!("Starting to initialize OIDC providers.");
+        info!("Starting to initialize OIDC providers from ENV.");
 
         for i in 0u32.. {
             let hostname =
@@ -137,39 +134,28 @@ impl OIDCProviders {
         if env::var("KUBERNETES_SERVICE_HOST").is_err() {
             return Ok(());
         } else {
-            info!("Running k8s ingress discovery");
+            info!("Starting to initialize OIDC providers from K8s.");
         }
 
-        let client = Client::try_default().await?;
-        let ingresses: Api<Ingress> = Api::all(client);
-        let lp = ListParams::default();
-        let ingress_list = ingresses.list(&lp).await?;
+        let k8s_providers = K8sIngressProvider::discover_all().await?;
 
-        info!("---");
+        for k8s_provider in k8s_providers.iter() {
+            let oidc_provider = OIDCProvider::new(
+                k8s_provider.issuer_url.clone(),
+                k8s_provider.client_id.clone(),
+                k8s_provider.client_secret.clone(),
+                k8s_provider.scopes.clone(),
+                k8s_provider.audience.clone(),
+            )
+            .await;
 
-        ingress_list
-            .items
-            .iter()
-            .filter(|ingress| {
-                ingress
-                    .metadata
-                    .annotations
-                    .as_ref()
-                    .and_then(|annotations| {
-                        annotations.get("oidc.ingress.kubernetes.io/oidc-forward-auth-enable")
-                    })
-                    .is_some()
-            })
-            .for_each(|ingress| {
-                info!(
-                    "K8s Ingress: {} in namespace {}",
-                    ingress.name().unwrap(),
-                    ingress.namespace().unwrap()
-                );
-                // info!("{:#?}", ingress);
+            info!("K8s OIDC provider details: {:?}", &oidc_provider);
+
+            k8s_provider.hostnames.iter().for_each(|hostname| {
+                self.providers
+                    .insert(hostname.to_lowercase().to_owned(), oidc_provider.clone());
             });
-
-        info!("---");
+        }
 
         return Ok(());
     }
