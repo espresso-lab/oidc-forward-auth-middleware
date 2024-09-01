@@ -1,4 +1,10 @@
+{{- $hasTraefikDeprecated := .Capabilities.APIVersions.Has "traefik.containo.us/v1alpha1/Middleware" }}
+{{- if or $hasTraefikDeprecated (.Capabilities.APIVersions.Has "traefik.io/v1alpha1/Middleware") }}
+{{- if $hasTraefikDeprecated }}
 apiVersion: traefik.containo.us/v1alpha1
+{{- else }}
+apiVersion: traefik.io/v1alpha1
+{{- end }}
 kind: Middleware
 metadata:
   name: oidc-forward-auth-middleware
@@ -9,3 +15,4 @@ spec:
     authResponseHeaders: ["Set-Cookie", "Location", "X-Forwarded-User"]
     authRequestHeaders: ["Cookie"]
     trustForwardHeader: true
+{{- end }}
