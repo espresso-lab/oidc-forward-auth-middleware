@@ -56,6 +56,12 @@ oidcProviders:
     audience: ["app1"]
 ```
 
+If your Traefik install already uses the `traefik.io` CRDs instead of the old `traefik.containo.us` CRDs be sure to add this to your values file:
+
+```yaml
+useDeprecatedTraefikApiGroup: false
+```
+
 Last, enable it in the ingress controller of the service `app.example.com` you would like to protect:
 
 ```yaml
