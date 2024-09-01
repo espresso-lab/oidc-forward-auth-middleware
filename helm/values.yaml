@@ -50,6 +50,10 @@ extraEnvVars:
   # - name: EXAMPLE_ENV
   #   value: ABCD
 
+# TODO Flip to false or remove once deprecated CRDs have been removed once and for all
+# See https://github.com/traefik/traefik/issues/9125
+useDeprecatedTraefikApiGroup: true
+
 autoscaling:
   enabled: false
   minReplicas: 1
