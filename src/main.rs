@@ -131,7 +131,7 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
 
     let token_response = match client
         .exchange_refresh_token(&RefreshToken::new(refresh_token.to_owned()))
-        .add_scopes(scopes) // TODO: Test if required
+        .add_scopes(scopes.clone())
         .request(http_client)
     {
         Ok(v) => v,
@@ -139,15 +139,45 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
             debug!("Refresh token: {}", &refresh_token);
             warn!("Error exchanging refresh token: {}", err);
 
-            // If the token is invalid, remove the cookie and try again.
-            // TODO: Directly redirect to forward_auth_handler
+            // Remove invalid cookies and trigger fresh OIDC flow
+            res.remove_cookie(ACCESS_TOKEN_COOKIE_NAME);
             res.remove_cookie(REFRESH_TOKEN_COOKIE_NAME);
-            res.render(Redirect::temporary(format!(
-                "{}://{}/{}",
-                headers.protocol,
-                headers.host,
-                headers.uri.trim_start_matches("/")
-            )));
+
+            // Generate new PKCE challenge and CSRF token for fresh login
+            let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+
+            let (authorize_url, csrf_state, _nonce) = client
+                .authorize_url(
+                    AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
+                    CsrfToken::new_random,
+                    Nonce::new_random,
+                )
+                .add_scopes(scopes)
+                .set_pkce_challenge(pkce_challenge)
+                .url();
+
+            res.add_cookie(
+                Cookie::build((PKCS_COOKIE_NAME, pkce_verifier.secret().to_string()))
+                    .secure(headers.https)
+                    .http_only(true)
+                    .build(),
+            );
+            res.add_cookie(
+                Cookie::build((STATE_COOKIE_NAME, csrf_state.secret().to_string()))
+                    .secure(headers.https)
+                    .http_only(true)
+                    .build(),
+            );
+            // Store original URI to redirect back after authentication
+            res.add_cookie(
+                Cookie::build((ORIGINAL_URI_COOKIE_NAME, headers.uri.clone()))
+                    .secure(headers.https)
+                    .http_only(true)
+                    .build(),
+            );
+
+            debug!("Refresh failed, redirecting to fresh OIDC flow: {}", authorize_url.to_string());
+            res.render(Redirect::temporary(authorize_url.to_string()));
 
             return;
         }
