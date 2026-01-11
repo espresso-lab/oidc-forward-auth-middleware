@@ -30,6 +30,7 @@ static ACCESS_TOKEN_COOKIE_NAME: &str = "x_oidc_access_token";
 static REFRESH_TOKEN_COOKIE_NAME: &str = "x_oidc_refresh_token";
 static STATE_COOKIE_NAME: &str = "x_oidc_csrf";
 static PKCS_COOKIE_NAME: &str = "x_oidc_pkce";
+static ORIGINAL_URI_COOKIE_NAME: &str = "x_oidc_original_uri";
 
 #[derive(Clone, Debug)]
 struct ForwardAuthHeaders {
@@ -64,6 +65,13 @@ async fn forward_auth_handler(_req: &mut Request, res: &mut Response, depot: &mu
     );
     res.add_cookie(
         Cookie::build((STATE_COOKIE_NAME, csrf_state.secret().to_string()))
+            .secure(headers.https)
+            .http_only(true)
+            .build(),
+    );
+    // Store original URI to redirect back after authentication
+    res.add_cookie(
+        Cookie::build((ORIGINAL_URI_COOKIE_NAME, headers.uri.clone()))
             .secure(headers.https)
             .http_only(true)
             .build(),
@@ -298,10 +306,19 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
     res.remove_cookie(STATE_COOKIE_NAME);
     res.remove_cookie(PKCS_COOKIE_NAME);
 
-    // Todo: redirect to the page vistited before
+    // Redirect to the original page visited before authentication
+    let original_uri = get_cookie(req, ORIGINAL_URI_COOKIE_NAME);
+    res.remove_cookie(ORIGINAL_URI_COOKIE_NAME);
+
+    let redirect_path = if original_uri.is_empty() || original_uri.contains("code=") {
+        "/".to_string()
+    } else {
+        original_uri
+    };
+
     res.render(Redirect::temporary(format!(
-        "{}://{}/",
-        headers.protocol, headers.host
+        "{}://{}{}",
+        headers.protocol, headers.host, redirect_path
     )));
 }
 
