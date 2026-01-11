@@ -158,7 +158,13 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response, depot: &mut
     let state = get_query_param(&uri, "state");
 
     if !code.is_empty() && !state.is_empty() {
-        res.status_code(StatusCode::UNAUTHORIZED);
+        let clean_uri = strip_oauth_params(&headers.uri);
+        res.render(Redirect::temporary(format!(
+            "{}://{}{}",
+            &headers.protocol,
+            &headers.host,
+            if clean_uri.starts_with('/') { clean_uri } else { format!("/{}", clean_uri) }
+        )));
         return;
     }
 
@@ -437,12 +443,21 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
     let code = get_query_param(&headers.uri, "code");
     let state = get_query_param(&headers.uri, "state");
 
+    let redirect_to_clean_url = || {
+        let clean_uri = strip_oauth_params(&headers.uri);
+        format!(
+            "{}://{}{}",
+            &headers.protocol,
+            &headers.host,
+            if clean_uri.starts_with('/') { clean_uri } else { format!("/{}", clean_uri) }
+        )
+    };
+
     let (pkce_cookie_name, pkce_verifier) = match find_pkce_cookie(req) {
         Some((name, value)) => (name, value),
         None => {
-            return res
-                .status_code(StatusCode::BAD_GATEWAY)
-                .render(Text::Plain("Missing PKCE cookie."));
+            res.render(Redirect::temporary(redirect_to_clean_url()));
+            return;
         }
     };
 
@@ -452,9 +467,8 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
     };
 
     if code.is_empty() {
-        return res
-            .status_code(StatusCode::BAD_GATEWAY)
-            .render(Text::Plain("No Token in response."));
+        res.render(Redirect::temporary(redirect_to_clean_url()));
+        return;
     }
 
     let token_response = match client
@@ -464,9 +478,12 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
     {
         Ok(tr) => tr,
         Err(_) => {
-            return res
-                .status_code(StatusCode::BAD_GATEWAY)
-                .render(Text::Plain("Token exchange failed."));
+            res.add_cookie(clear_cookie(&pkce_cookie_name));
+            if !csrf_cookie_name.is_empty() {
+                res.add_cookie(clear_cookie(&csrf_cookie_name));
+            }
+            res.render(Redirect::temporary(redirect_to_clean_url()));
+            return;
         }
     };
 
