@@ -1884,6 +1884,7 @@ dependencies = [
 name = "oidc-forward-auth-middleware"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "jsonwebtoken",
  "k8s-openapi",
  "kube",
@@ -1892,6 +1893,7 @@ dependencies = [
  "reqwest 0.12.22",
  "salvo",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
