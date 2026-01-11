@@ -158,12 +158,18 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response, depot: &mut
     let state = get_query_param(&uri, "state");
 
     if !code.is_empty() && !state.is_empty() {
-        let clean_uri = strip_oauth_params(&headers.uri);
+        let redirect_path = match OAuthState::decode(&state) {
+            Some(oauth_state) => {
+                let uri = oauth_state.redirect_uri;
+                if uri.is_empty() || uri.contains("code=") { "/".to_string() } else { uri }
+            }
+            None => "/".to_string(),
+        };
         res.render(Redirect::temporary(format!(
             "{}://{}{}",
             &headers.protocol,
             &headers.host,
-            if clean_uri.starts_with('/') { clean_uri } else { format!("/{}", clean_uri) }
+            if redirect_path.starts_with('/') { redirect_path } else { format!("/{}", redirect_path) }
         )));
         return;
     }
