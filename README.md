@@ -17,7 +17,7 @@ This container acts as a `ForwardAuth` middleware for the traefik ingress contro
 ## Features
 
 - Blazing fast ⚡️ and written in Rust ⚙️
-- Secure implementation 🔐
+- Secure implementation 🔐 with PKCE, CSRF protection, and SameSite cookies
 - Integration with traefik ingress controller
 - Easy to deploy to a Kubernetes environment via Helm or to use it with Docker Compose
 - Simple configuration via environment variables or Helm values
@@ -25,7 +25,16 @@ This container acts as a `ForwardAuth` middleware for the traefik ingress contro
 ### New features in version 3
 
 - Added the HTTP header `X-Forwarded-User` containing the jwt user sub. Your backend can directly consume that header to get the user id without the need to encrypt or validate jwt tokens.
-- Helm Chart: Added support for Traefik V2 and V3 middleware CRDs 
+- Helm Chart: Added support for Traefik V2 and V3 middleware CRDs
+
+### Security
+
+- **PKCE** (Proof Key for Code Exchange) for secure authorization code flow
+- **CSRF protection** via state parameter with cryptographic nonce
+- **HttpOnly & Secure cookies** to prevent XSS attacks
+- **SameSite=Lax** cookies for additional CSRF protection
+- **Automatic token expiry** based on JWT `exp` claim
+- **Redirect loop prevention** on failed authentication callbacks 
 
 ## Getting started
 
@@ -103,6 +112,17 @@ Use `OIDC_PROVIDER_0_*` for the first provider, `OIDC_PROVIDER_1_*` for the seco
 | OIDC_PROVIDER_0_CLIENT_SECRET | String | OIDC client secret                          |
 | OIDC_PROVIDER_0_SCOPES        | String | OIDC scopes (openid, email, ...)            |
 | OIDC_PROVIDER_0_AUDIENCE      | String | OIDC audience                               |
+
+### Cookies
+
+The middleware sets the following cookies:
+
+| Cookie | Purpose | Expiry |
+| ------ | ------- | ------ |
+| `x_oidc_access_token` | JWT access token | Based on JWT `exp` claim |
+| `x_oidc_refresh_token` | Refresh token for silent renewal | Session |
+| `x_oidc_csrf_{nonce}` | CSRF protection during auth flow | 1 hour |
+| `x_oidc_pkce_{nonce}` | PKCE verifier during auth flow | 1 hour |
 
 ## License
 

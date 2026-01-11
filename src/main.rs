@@ -1,6 +1,7 @@
 mod oidc_providers;
 mod salvo_utils;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use jsonwebtoken::jwk::JwkSet;
 use jsonwebtoken::{decode as jwt_decode, decode_header, DecodingKey, Validation};
 use oidc_providers::OIDCProviders;
@@ -10,7 +11,7 @@ use openidconnect::{
     AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse,
     PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, Scope,
 };
-use salvo::http::cookie::Cookie;
+use salvo::http::cookie::{Cookie, SameSite, time::{Duration, OffsetDateTime}};
 use salvo::http::{HeaderValue, StatusCode};
 use salvo::logging::Logger;
 use salvo::prelude::{
@@ -22,15 +23,121 @@ use salvo_utils::{get_cookie, get_header, get_query_param, security_middleware};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::OnceLock;
-use tracing::{debug, info, warn};
+use tracing::info;
 use urlencoding::decode;
 
 static PROVIDERS: OnceLock<OIDCProviders> = OnceLock::new();
 static ACCESS_TOKEN_COOKIE_NAME: &str = "x_oidc_access_token";
 static REFRESH_TOKEN_COOKIE_NAME: &str = "x_oidc_refresh_token";
-static STATE_COOKIE_NAME: &str = "x_oidc_csrf";
-static PKCS_COOKIE_NAME: &str = "x_oidc_pkce";
-static ORIGINAL_URI_COOKIE_NAME: &str = "x_oidc_original_uri";
+static CSRF_COOKIE_PREFIX: &str = "x_oidc_csrf_";
+static PKCE_COOKIE_PREFIX: &str = "x_oidc_pkce_";
+
+fn build_csrf_cookie_name(nonce: &str) -> String {
+    format!("{}{}", CSRF_COOKIE_PREFIX, &nonce[..6.min(nonce.len())])
+}
+
+fn build_pkce_cookie_name(nonce: &str) -> String {
+    format!("{}{}", PKCE_COOKIE_PREFIX, &nonce[..6.min(nonce.len())])
+}
+
+fn find_csrf_cookie(req: &Request) -> Option<(String, String)> {
+    req.cookies()
+        .iter()
+        .find(|c| c.name().starts_with(CSRF_COOKIE_PREFIX))
+        .map(|c| (c.name().to_string(), c.value().to_string()))
+}
+
+fn find_pkce_cookie(req: &Request) -> Option<(String, String)> {
+    req.cookies()
+        .iter()
+        .find(|c| c.name().starts_with(PKCE_COOKIE_PREFIX))
+        .map(|c| (c.name().to_string(), c.value().to_string()))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OAuthState {
+    csrf: String,
+    redirect_uri: String,
+}
+
+impl OAuthState {
+    fn encode(&self) -> String {
+        let json = serde_json::to_string(self).unwrap_or_default();
+        URL_SAFE_NO_PAD.encode(json.as_bytes())
+    }
+
+    fn decode(encoded: &str) -> Option<Self> {
+        let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
+        let json = String::from_utf8(bytes).ok()?;
+        serde_json::from_str(&json).ok()
+    }
+
+    fn nonce(&self) -> &str {
+        &self.csrf[..6.min(self.csrf.len())]
+    }
+}
+
+fn make_auth_flow_cookie(name: &str, value: &str, https: bool) -> Cookie<'static> {
+    Cookie::build((name.to_owned(), value.to_owned()))
+        .path("/")
+        .secure(https)
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .expires(OffsetDateTime::now_utc() + Duration::hours(1))
+        .build()
+}
+
+fn make_token_cookie(name: &str, value: &str, https: bool, expires_in_secs: Option<i64>) -> Cookie<'static> {
+    let mut builder = Cookie::build((name.to_owned(), value.to_owned()))
+        .path("/")
+        .secure(https)
+        .http_only(true)
+        .same_site(SameSite::Lax);
+    
+    if let Some(secs) = expires_in_secs {
+        builder = builder.expires(OffsetDateTime::now_utc() + Duration::seconds(secs));
+    }
+    
+    builder.build()
+}
+
+fn clear_cookie(name: &str) -> Cookie<'static> {
+    Cookie::build((name.to_owned(), "".to_owned()))
+        .path("/")
+        .same_site(SameSite::Lax)
+        .expires(OffsetDateTime::now_utc() - Duration::hours(1))
+        .build()
+}
+
+fn extract_jwt_expiry(token: &str) -> Option<i64> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let payload = URL_SAFE_NO_PAD.decode(parts[1]).ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&payload).ok()?;
+    let exp = json.get("exp")?.as_i64()?;
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    Some(exp - now)
+}
+
+fn strip_oauth_params(uri: &str) -> String {
+    if let Some(query_start) = uri.find('?') {
+        let path = &uri[..query_start];
+        let query = &uri[query_start + 1..];
+        let filtered: Vec<&str> = query
+            .split('&')
+            .filter(|p| !p.starts_with("code=") && !p.starts_with("state="))
+            .collect();
+        if filtered.is_empty() {
+            path.to_string()
+        } else {
+            format!("{}?{}", path, filtered.join("&"))
+        }
+    } else {
+        uri.to_string()
+    }
+}
 
 #[derive(Clone, Debug)]
 struct ForwardAuthHeaders {
@@ -41,45 +148,66 @@ struct ForwardAuthHeaders {
 }
 
 #[handler]
-async fn forward_auth_handler(_req: &mut Request, res: &mut Response, depot: &mut Depot) {
+async fn forward_auth_handler(req: &mut Request, res: &mut Response, depot: &mut Depot) {
     let client = depot.obtain::<CoreClient>().unwrap();
     let scopes = depot.obtain::<Vec<Scope>>().unwrap().to_owned();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
-    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
-    let (authorize_url, csrf_state, _nonce) = client
+    let uri = get_header(req, "x-forwarded-uri");
+    let code = get_query_param(&uri, "code");
+    let state = get_query_param(&uri, "state");
+
+    if !code.is_empty() && !state.is_empty() {
+        res.status_code(StatusCode::UNAUTHORIZED);
+        return;
+    }
+
+    let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+    let csrf_token = CsrfToken::new_random();
+
+    let original_uri = strip_oauth_params(&headers.uri);
+    let oauth_state = OAuthState {
+        csrf: csrf_token.secret().clone(),
+        redirect_uri: original_uri,
+    };
+
+    let (authorize_url, _csrf_state, _nonce) = client
         .authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
-            CsrfToken::new_random,
+            move || csrf_token.clone(),
             Nonce::new_random,
         )
         .add_scopes(scopes)
         .set_pkce_challenge(pkce_challenge)
         .url();
 
-    res.add_cookie(
-        Cookie::build((PKCS_COOKIE_NAME, pkce_verifier.secret().to_string()))
-            .secure(headers.https)
-            .http_only(true)
-            .build(),
-    );
-    res.add_cookie(
-        Cookie::build((STATE_COOKIE_NAME, csrf_state.secret().to_string()))
-            .secure(headers.https)
-            .http_only(true)
-            .build(),
-    );
-    // Store original URI to redirect back after authentication
-    res.add_cookie(
-        Cookie::build((ORIGINAL_URI_COOKIE_NAME, headers.uri.clone()))
-            .secure(headers.https)
-            .http_only(true)
-            .build(),
-    );
+    let nonce = oauth_state.nonce();
+    res.add_cookie(make_auth_flow_cookie(
+        &build_pkce_cookie_name(nonce),
+        pkce_verifier.secret(),
+        headers.https,
+    ));
+    res.add_cookie(make_auth_flow_cookie(
+        &build_csrf_cookie_name(nonce),
+        &oauth_state.csrf,
+        headers.https,
+    ));
 
-    debug!("Redirecting client to {}", authorize_url.to_string());
+    let mut redirect_url = authorize_url.to_string();
+    if let Some(pos) = redirect_url.find("&state=") {
+        let end_pos = redirect_url[pos + 7..]
+            .find('&')
+            .map(|p| pos + 7 + p)
+            .unwrap_or(redirect_url.len());
+        redirect_url = format!(
+            "{}&state={}{}",
+            &redirect_url[..pos],
+            oauth_state.encode(),
+            &redirect_url[end_pos..]
+        );
+    }
 
-    res.render(Redirect::temporary(authorize_url.to_string()));
+    res.render(Redirect::temporary(redirect_url));
 }
 
 #[handler]
@@ -98,16 +226,8 @@ async fn ok_handler(req: &mut Request, res: &mut Response) {
     let headers = res.headers_mut();
     let sub_header = req.headers().get("X-Forwarded-User");
 
-    // Depot would be better, but check_cookie middleware does not support it
-    // TODO: Fix with actix migration
-
-    if sub_header.is_some() {
-        debug!(
-            "X-Forwarded-User: {}",
-            &sub_header.clone().unwrap().to_str().unwrap()
-        );
-
-        headers.insert("X-Forwarded-User", sub_header.unwrap().to_owned());
+    if let Some(sub) = sub_header {
+        headers.insert("X-Forwarded-User", sub.to_owned());
     }
 
     res.status_code(StatusCode::NO_CONTENT);
@@ -115,15 +235,18 @@ async fn ok_handler(req: &mut Request, res: &mut Response) {
 
 fn has_refresh_token(req: &mut Request, _state: &mut PathState) -> bool {
     let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
-
     !refresh_token.is_empty()
 }
 
 #[handler]
 async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut Depot) {
-    let refresh_token = decode(&get_cookie(req, REFRESH_TOKEN_COOKIE_NAME))
-        .unwrap()
-        .to_string();
+    let refresh_token = match decode(&get_cookie(req, REFRESH_TOKEN_COOKIE_NAME)) {
+        Ok(v) => v.to_string(),
+        Err(_) => {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        }
+    };
 
     let client = depot.obtain::<CoreClient>().unwrap();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
@@ -131,95 +254,129 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
 
     let token_response = match client
         .exchange_refresh_token(&RefreshToken::new(refresh_token.to_owned()))
-        .add_scopes(scopes) // TODO: Test if required
+        .add_scopes(scopes.clone())
         .request(http_client)
     {
         Ok(v) => v,
-        Err(err) => {
-            debug!("Refresh token: {}", &refresh_token);
-            warn!("Error exchanging refresh token: {}", err);
+        Err(_) => {
+            res.add_cookie(clear_cookie(ACCESS_TOKEN_COOKIE_NAME));
+            res.add_cookie(clear_cookie(REFRESH_TOKEN_COOKIE_NAME));
 
-            // If the token is invalid, remove the cookie and try again.
-            // TODO: Directly redirect to forward_auth_handler
-            res.remove_cookie(REFRESH_TOKEN_COOKIE_NAME);
-            res.render(Redirect::temporary(format!(
-                "{}://{}/{}",
-                headers.protocol,
-                headers.host,
-                headers.uri.trim_start_matches("/")
-            )));
+            let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+            let csrf_token = CsrfToken::new_random();
 
+            let original_uri = strip_oauth_params(&headers.uri);
+            let oauth_state = OAuthState {
+                csrf: csrf_token.secret().clone(),
+                redirect_uri: original_uri,
+            };
+
+            let (authorize_url, _csrf_state, _nonce) = client
+                .authorize_url(
+                    AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
+                    move || csrf_token.clone(),
+                    Nonce::new_random,
+                )
+                .add_scopes(scopes)
+                .set_pkce_challenge(pkce_challenge)
+                .url();
+
+            let nonce = oauth_state.nonce();
+            res.add_cookie(make_auth_flow_cookie(
+                &build_pkce_cookie_name(nonce),
+                pkce_verifier.secret(),
+                headers.https,
+            ));
+            res.add_cookie(make_auth_flow_cookie(
+                &build_csrf_cookie_name(nonce),
+                &oauth_state.csrf,
+                headers.https,
+            ));
+
+            let mut redirect_url = authorize_url.to_string();
+            if let Some(pos) = redirect_url.find("&state=") {
+                let end_pos = redirect_url[pos + 7..]
+                    .find('&')
+                    .map(|p| pos + 7 + p)
+                    .unwrap_or(redirect_url.len());
+                redirect_url = format!(
+                    "{}&state={}{}",
+                    &redirect_url[..pos],
+                    oauth_state.encode(),
+                    &redirect_url[end_pos..]
+                );
+            }
+
+            res.render(Redirect::temporary(redirect_url));
             return;
         }
     };
 
-    let access_token = decode(&token_response.access_token().secret())
-        .unwrap()
-        .into_owned();
+    let access_token = match decode(&token_response.access_token().secret()) {
+        Ok(v) => v.into_owned(),
+        Err(_) => {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        }
+    };
 
-    let refresh_token = decode(&token_response.refresh_token().unwrap().secret())
-        .unwrap()
-        .into_owned();
+    let refresh_token = match token_response.refresh_token() {
+        Some(rt) => match decode(&rt.secret()) {
+            Ok(v) => v.into_owned(),
+            Err(_) => {
+                res.status_code(StatusCode::UNAUTHORIZED);
+                return;
+            }
+        },
+        None => {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        }
+    };
 
     if access_token.is_empty() {
         res.status_code(StatusCode::UNAUTHORIZED);
+        return;
     }
 
-    res.add_cookie(
-        Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token.to_owned()))
-            .secure(headers.https)
-            .http_only(true)
-            .build(),
-    );
+    let access_expiry = extract_jwt_expiry(&access_token);
+    res.add_cookie(make_token_cookie(ACCESS_TOKEN_COOKIE_NAME, &access_token, headers.https, access_expiry));
+    res.add_cookie(make_token_cookie(REFRESH_TOKEN_COOKIE_NAME, &refresh_token, headers.https, None));
 
-    res.add_cookie(
-        Cookie::build((REFRESH_TOKEN_COOKIE_NAME, refresh_token))
-            .secure(headers.https)
-            .http_only(true)
-            .build(),
-    );
-
+    let clean_uri = strip_oauth_params(&headers.uri);
     res.render(Redirect::temporary(format!(
-        "{}://{}/{}",
+        "{}://{}{}",
         &headers.protocol,
         &headers.host,
-        &headers.uri.trim_start_matches("/")
+        if clean_uri.starts_with('/') { clean_uri } else { format!("/{}", clean_uri) }
     )));
 }
 
-// TODO: Refactor from path check to middleware
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let hostname = get_header(req, "x-forwarded-host");
     let token = get_cookie(req, ACCESS_TOKEN_COOKIE_NAME);
 
     if token.is_empty() {
-        debug!("Cookie key {} is empty.", ACCESS_TOKEN_COOKIE_NAME);
         return false;
     }
 
-    debug!("Received cookie value: {}", &token);
-
     let oidc_provider = match PROVIDERS.get().unwrap().find_by_hostname(&hostname) {
         Some(val) => val,
-        None => {
-            debug!("OIDC provider not found for hostname {}.", &hostname);
-            return false;
-        }
+        None => return false,
     };
 
     let header = match decode_header(&token) {
         Ok(val) => val,
-        Err(_) => {
-            debug!("Error when decoding headers of token: {}", &token);
-            return false;
-        }
+        Err(_) => return false,
     };
 
-    let key_id = header.kid.unwrap();
-    debug!("Token JWK Key ID: {}", &key_id);
+    let key_id = match header.kid {
+        Some(kid) => kid,
+        None => return false,
+    };
 
     let jwks: JwkSet = oidc_provider.clone().jwks;
-    let jwk: &jsonwebtoken::jwk::Jwk = match jwks.keys.iter().find(|k| {
+    let jwk = match jwks.keys.iter().find(|k| {
         k.common
             .key_id
             .as_ref()
@@ -229,41 +386,47 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
         _ => return false,
     };
 
-    let key = DecodingKey::from_jwk(&jwk).unwrap();
-    let mut validation = Validation::new(header.alg);
+    let key = match DecodingKey::from_jwk(&jwk) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
 
+    let mut validation = Validation::new(header.alg);
     validation.set_audience(&oidc_provider.audience.clone());
     validation.set_issuer(&vec![oidc_provider.issuer_url.clone().as_str()]);
 
-    let claims = jwt_decode::<Claims>(&token, &key, &validation);
+    let claims = match jwt_decode::<Claims>(&token, &key, &validation) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
 
-    if !claims.is_ok() {
-        return false;
-    }
-
-    let sub = claims.unwrap().claims.sub;
-
-    // Does not work in PathFilter :/
-    // depot.inject::<Claims>(myclaims);
-
-    // So we pass it via the request header
+    let sub = claims.claims.sub;
     let headers = req.headers_mut();
     headers.insert("X-Forwarded-User", HeaderValue::from_str(&sub).unwrap());
 
-    return true;
+    true
 }
 
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
     let uri = get_header(req, "x-forwarded-uri");
-    let csrf_state = get_cookie(req, STATE_COOKIE_NAME);
     let code = get_query_param(&uri, "code");
     let state = get_query_param(&uri, "state");
 
-    return !(uri.is_empty()
-        || code.is_empty()
-        || state.is_empty()
-        || csrf_state.is_empty()
-        || state != csrf_state);
+    if uri.is_empty() || code.is_empty() || state.is_empty() {
+        return false;
+    }
+
+    let oauth_state = match OAuthState::decode(&state) {
+        Some(s) => s,
+        None => return false,
+    };
+
+    let csrf_cookie = match find_csrf_cookie(req) {
+        Some((_, value)) => value,
+        None => return false,
+    };
+
+    oauth_state.csrf == csrf_cookie
 }
 
 #[handler]
@@ -272,7 +435,21 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
 
     let code = get_query_param(&headers.uri, "code");
-    let pkce_verifier = get_cookie(req, PKCS_COOKIE_NAME);
+    let state = get_query_param(&headers.uri, "state");
+
+    let (pkce_cookie_name, pkce_verifier) = match find_pkce_cookie(req) {
+        Some((name, value)) => (name, value),
+        None => {
+            return res
+                .status_code(StatusCode::BAD_GATEWAY)
+                .render(Text::Plain("Missing PKCE cookie."));
+        }
+    };
+
+    let csrf_cookie_name = match find_csrf_cookie(req) {
+        Some((name, _)) => name,
+        None => String::new(),
+    };
 
     if code.is_empty() {
         return res
@@ -280,45 +457,54 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
             .render(Text::Plain("No Token in response."));
     }
 
-    let token_response = client
+    let token_response = match client
         .exchange_code(AuthorizationCode::new(code))
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
         .request(http_client)
-        .unwrap();
+    {
+        Ok(tr) => tr,
+        Err(_) => {
+            return res
+                .status_code(StatusCode::BAD_GATEWAY)
+                .render(Text::Plain("Token exchange failed."));
+        }
+    };
 
     let access_token = token_response.access_token().secret().to_owned();
-    let refresh_token = token_response.refresh_token().unwrap().secret().to_owned();
+    let refresh_token = match token_response.refresh_token() {
+        Some(rt) => rt.secret().to_owned(),
+        None => String::new(),
+    };
 
-    res.add_cookie(
-        Cookie::build((ACCESS_TOKEN_COOKIE_NAME, access_token))
-            .secure(headers.https)
-            .http_only(true)
-            .build(),
-    );
+    let access_expiry = extract_jwt_expiry(&access_token);
+    res.add_cookie(make_token_cookie(ACCESS_TOKEN_COOKIE_NAME, &access_token, headers.https, access_expiry));
 
-    res.add_cookie(
-        Cookie::build((REFRESH_TOKEN_COOKIE_NAME, refresh_token))
-            .secure(headers.https)
-            .http_only(true)
-            .build(),
-    );
+    if !refresh_token.is_empty() {
+        res.add_cookie(make_token_cookie(REFRESH_TOKEN_COOKIE_NAME, &refresh_token, headers.https, None));
+    }
 
-    res.remove_cookie(STATE_COOKIE_NAME);
-    res.remove_cookie(PKCS_COOKIE_NAME);
+    res.add_cookie(clear_cookie(&pkce_cookie_name));
+    if !csrf_cookie_name.is_empty() {
+        res.add_cookie(clear_cookie(&csrf_cookie_name));
+    }
 
-    // Redirect to the original page visited before authentication
-    let original_uri = get_cookie(req, ORIGINAL_URI_COOKIE_NAME);
-    res.remove_cookie(ORIGINAL_URI_COOKIE_NAME);
-
-    let redirect_path = if original_uri.is_empty() || original_uri.contains("code=") {
-        "/".to_string()
-    } else {
-        original_uri
+    let redirect_path = match OAuthState::decode(&state) {
+        Some(oauth_state) => {
+            let uri = oauth_state.redirect_uri;
+            if uri.is_empty() || uri.contains("code=") {
+                "/".to_string()
+            } else {
+                uri
+            }
+        }
+        None => "/".to_string(),
     };
 
     res.render(Redirect::temporary(format!(
         "{}://{}{}",
-        headers.protocol, headers.host, redirect_path
+        headers.protocol,
+        headers.host,
+        if redirect_path.starts_with('/') { redirect_path } else { format!("/{}", redirect_path) }
     )));
 }
 
