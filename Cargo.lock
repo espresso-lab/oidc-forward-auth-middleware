@@ -2183,6 +2183,7 @@ dependencies = [
  "openidconnect",
  "openssl",
  "reqwest 0.12.28",
+ "rustls",
  "salvo",
  "serde",
  "serde_json",

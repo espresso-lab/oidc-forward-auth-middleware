@@ -13,6 +13,7 @@ use openidconnect::{
     EndpointSet, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
     RefreshToken, Scope,
 };
+use rustls::crypto::ring::default_provider;
 use salvo::http::cookie::{Cookie, SameSite, time::{Duration, OffsetDateTime}};
 use salvo::http::{HeaderValue, StatusCode};
 use salvo::logging::Logger;
@@ -539,6 +540,11 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
 
 #[tokio::main]
 async fn main() {
+    // Install rustls crypto provider before any TLS operations
+    default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     tracing_subscriber::fmt::init();
 
     let enhanced_security_enabled = match env::var("DISABLE_ENHANCED_SECURITY") {

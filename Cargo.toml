@@ -28,6 +28,7 @@ salvo = { version = "0", features = [
     "server",
     "quinn",
     "logging",
+    "rustls",
 ] }
 tokio = { version = "1", features = ["macros"], default-features = false }
 jsonwebtoken = { version = "10", features = ["rust_crypto"], default-features = false }
@@ -35,6 +36,7 @@ reqwest = { version = "0", features = [
     "json",
     "rustls-tls",
 ], default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 serde = "1"
 openssl = { version = "0", features = ["vendored"], default-features = false }
 tracing = "0"
