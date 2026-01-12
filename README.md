@@ -104,14 +104,14 @@ For the latest example have a look at the `docker-compose.yml` file.
 
 Use `OIDC_PROVIDER_0_*` for the first provider, `OIDC_PROVIDER_1_*` for the second one and so on.
 
-| Environment variable          | Type   | Description                                 |
-| ----------------------------- | ------ | ------------------------------------------- |
-| OIDC_PROVIDER_0_HOSTNAME      | String | Name of the hostname (traefik ingress host) |
-| OIDC_PROVIDER_0_ISSUER_URL    | String | OIDC issuer url                             |
-| OIDC_PROVIDER_0_CLIENT_ID     | String | OIDC client id                              |
-| OIDC_PROVIDER_0_CLIENT_SECRET | String | OIDC client secret                          |
-| OIDC_PROVIDER_0_SCOPES        | String | OIDC scopes (openid, email, ...)            |
-| OIDC_PROVIDER_0_AUDIENCE      | String | OIDC audience                               |
+| Environment variable          | Type   | Description                                 | Example                                      |
+| ----------------------------- | ------ | ------------------------------------------- | -------------------------------------------- |
+| OIDC_PROVIDER_0_HOSTNAME      | String | Name of the hostname (traefik ingress host) | `app.example.com`                            |
+| OIDC_PROVIDER_0_ISSUER_URL    | String | OIDC issuer url                             | `https://id.example.com/oauth2/openid/app`   |
+| OIDC_PROVIDER_0_CLIENT_ID     | String | OIDC client id                              | `my-app-client`                              |
+| OIDC_PROVIDER_0_CLIENT_SECRET | String | OIDC client secret                          | `super-secret-password`                      |
+| OIDC_PROVIDER_0_SCOPES        | String | OIDC scopes (openid, email, ...)            | `openid,email,profile`                       |
+| OIDC_PROVIDER_0_AUDIENCE      | String | OIDC audience                               | `my-app-client`                              |
 
 ### Cookies
 
