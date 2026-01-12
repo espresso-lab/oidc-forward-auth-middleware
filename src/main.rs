@@ -231,10 +231,18 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response, depot: &mut
     let state = get_query_param(&uri, "state");
 
     if !code.is_empty() && !state.is_empty() {
+        for cookie in req.cookies().iter() {
+            let name = cookie.name();
+            if name.starts_with(CSRF_COOKIE_PREFIX) || name.starts_with(PKCE_COOKIE_PREFIX) {
+                res.add_cookie(clear_cookie(name));
+            }
+        }
+        
         let redirect_path = OAuthState::decode(&state)
             .map(|s| s.redirect_uri)
             .filter(|uri| !uri.is_empty() && !uri.contains("code="))
-            .unwrap_or_else(|| "/".to_string());
+            .unwrap_or_else(|| strip_oauth_params(&headers.uri));
+        
         res.render(Redirect::temporary(headers.build_url(&redirect_path)));
         return;
     }
