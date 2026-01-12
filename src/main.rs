@@ -576,7 +576,7 @@ async fn main() {
         );
 
     let service = Service::new(router).hoop(Logger::new());
-    let acceptor = TcpListener::new("0.0.0.0:3000").bind().await;
+    let acceptor = TcpListener::new(env::var("LISTEN").unwrap_or("0.0.0.0:3000".to_owned())).bind().await;
 
     Server::new(acceptor).serve(service).await;
 }
