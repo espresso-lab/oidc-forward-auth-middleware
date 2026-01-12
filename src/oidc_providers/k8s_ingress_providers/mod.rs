@@ -60,18 +60,17 @@ impl K8sIngressProvider {
             // TODO: Get client-secret from k8s secret
             let client_id: String;
             let client_secret: String;
-            let oidc_secret = annotations.get("oidc.ingress.kubernetes.io/existing-secret");
 
-            if oidc_secret.is_some() {
+            if let Some(oidc_secret) = annotations.get("oidc.ingress.kubernetes.io/existing-secret") {
                 info!(
                     "Fetching secret {} in namespace {}.",
-                    &oidc_secret.unwrap(),
-                    &ingress.namespace().unwrap().to_string()
+                    oidc_secret,
+                    ingress.namespace().unwrap()
                 );
 
                 let secret: Secret =
-                    Api::namespaced(client.to_owned(), &ingress.namespace().unwrap().to_string())
-                        .get(oidc_secret.unwrap())
+                    Api::namespaced(client.to_owned(), ingress.namespace().unwrap().as_ref())
+                        .get(oidc_secret)
                         .await?;
 
                 if let Some(data) = secret.data {
@@ -118,6 +117,6 @@ impl K8sIngressProvider {
 
         info!("{:#?}", return_list);
 
-        return Ok(return_list);
+        Ok(return_list)
     }
 }

@@ -1,14 +1,25 @@
 mod k8s_ingress_providers;
 
-use std::{collections::HashMap, env};
+use std::{collections::HashMap, env, sync::OnceLock};
 
 use jsonwebtoken::jwk::JwkSet;
 use k8s_ingress_providers::K8sIngressProvider;
 use kube::Error;
 use openidconnect::core::CoreProviderMetadata;
-use openidconnect::reqwest::async_http_client;
 use openidconnect::{ClientId, ClientSecret, IssuerUrl, Scope};
 use tracing::{debug, info, warn};
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+pub fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .use_rustls_tls()
+            .build()
+            .expect("Failed to build HTTP client")
+    })
+}
 
 #[derive(Clone, Debug)]
 pub struct OIDCProvider {
@@ -28,18 +39,15 @@ impl OIDCProvider {
         scopes: String,
         audience: String,
     ) -> Self {
-        let provider_metadata = CoreProviderMetadata::discover_async(
-            IssuerUrl::new(issuer_url.to_owned()).expect("Invalid issuer URL"),
-            async_http_client,
-        )
-        .await
-        .unwrap();
+        let http_client = get_http_client();
+        let issuer = IssuerUrl::new(issuer_url).expect("Invalid issuer URL");
 
-        let jwks: JwkSet = reqwest::Client::builder()
-            .use_rustls_tls()
-            .build()
-            .unwrap()
-            .get(&provider_metadata.jwks_uri().url().to_string())
+        let provider_metadata = CoreProviderMetadata::discover_async(issuer.clone(), http_client)
+            .await
+            .unwrap();
+
+        let jwks: JwkSet = http_client
+            .get(provider_metadata.jwks_uri().url().as_str())
             .send()
             .await
             .unwrap()
@@ -50,7 +58,7 @@ impl OIDCProvider {
         OIDCProvider {
             client_id: ClientId::new(client_id),
             client_secret: ClientSecret::new(client_secret),
-            issuer_url: IssuerUrl::new(issuer_url.to_owned()).expect("Invalid issuer URL"),
+            issuer_url: issuer,
             scopes: scopes
                 .split(',')
                 .filter(|s| !s.is_empty())
@@ -79,50 +87,40 @@ impl OIDCProviders {
         providers
     }
 
-    async fn load_from_env(&mut self) -> () {
+    async fn load_from_env(&mut self) {
         info!("Starting to initialize OIDC providers from ENV.");
 
         for i in 0u32.. {
-            let hostname =
-                env::var(&format!("OIDC_PROVIDER_{}_HOSTNAME", i)).map(|s| s.to_lowercase());
+            let hostname = env::var(format!("OIDC_PROVIDER_{}_HOSTNAME", i)).map(|s| s.to_lowercase());
+            let issuer_url = env::var(format!("OIDC_PROVIDER_{}_ISSUER_URL", i));
+            let client_id = env::var(format!("OIDC_PROVIDER_{}_CLIENT_ID", i));
+            let client_secret = env::var(format!("OIDC_PROVIDER_{}_CLIENT_SECRET", i));
+            let scopes = env::var(format!("OIDC_PROVIDER_{}_SCOPES", i));
+            let audience = env::var(format!("OIDC_PROVIDER_{}_AUDIENCE", i));
 
-            let issuer_url = env::var(&format!("OIDC_PROVIDER_{}_ISSUER_URL", i));
-            let client_id = env::var(&format!("OIDC_PROVIDER_{}_CLIENT_ID", i));
-            let client_secret = env::var(&format!("OIDC_PROVIDER_{}_CLIENT_SECRET", i));
-            let scopes = env::var(&format!("OIDC_PROVIDER_{}_SCOPES", i));
-            let audience = env::var(&format!("OIDC_PROVIDER_{}_AUDIENCE", i));
-
-            if hostname.clone().is_err() && issuer_url.clone().is_err()
-                || client_id.clone().is_err()
-                || client_secret.clone().is_err()
-                || audience.clone().is_err()
-            {
+            let (Ok(hostname), Ok(issuer_url), Ok(client_id), Ok(client_secret), Ok(scopes), Ok(audience)) =
+                (hostname, issuer_url, client_id, client_secret, scopes, audience)
+            else {
                 debug!("OIDC provider init: Environment variable set with counter {} is incomplete. Stopping here.", i);
                 break;
-            }
+            };
 
             let oidc_provider = OIDCProvider::new(
-                issuer_url.clone().unwrap(),
-                client_id.unwrap(),
-                client_secret.unwrap(),
-                scopes.unwrap(),
-                audience.unwrap(),
+                issuer_url.clone(),
+                client_id,
+                client_secret,
+                scopes,
+                audience,
             )
             .await;
 
             debug!("OIDC provider details: {:?}", &oidc_provider);
+            info!("Added OIDC provider: {} -> {}", &hostname, &issuer_url);
 
-            self.providers
-                .insert(hostname.clone().unwrap().to_owned(), oidc_provider);
-
-            info!(
-                "Added OIDC provider: {} -> {}",
-                &hostname.unwrap(),
-                &issuer_url.unwrap()
-            );
+            self.providers.insert(hostname, oidc_provider);
         }
 
-        if self.providers.len() == 0 {
+        if self.providers.is_empty() {
             warn!("No OIDC providers initialized. Please check environment variables.")
         } else {
             info!("Initialized {} OIDC providers.", self.providers.len());
@@ -153,11 +151,11 @@ impl OIDCProviders {
 
             k8s_provider.hostnames.iter().for_each(|hostname| {
                 self.providers
-                    .insert(hostname.to_lowercase().to_owned(), oidc_provider.clone());
+                    .insert(hostname.to_lowercase(), oidc_provider.clone());
             });
         }
 
-        return Ok(());
+        Ok(())
     }
 
     pub fn find_by_hostname(&self, hostname: &str) -> Option<&OIDCProvider> {
