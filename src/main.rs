@@ -310,7 +310,7 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
         Err(_) => {
             res.add_cookie(clear_cookie(ACCESS_TOKEN_COOKIE_NAME));
             res.add_cookie(clear_cookie(REFRESH_TOKEN_COOKIE_NAME));
-            start_auth_flow(client, headers, scopes, res);
+            res.render(Redirect::temporary(headers.build_url(&strip_oauth_params(&headers.uri))));
             return;
         }
     };
@@ -345,7 +345,7 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
     let access_expiry = extract_jwt_expiry(&access_token);
     res.add_cookie(make_token_cookie(ACCESS_TOKEN_COOKIE_NAME, &access_token, headers.https, access_expiry));
     res.add_cookie(make_token_cookie(REFRESH_TOKEN_COOKIE_NAME, &refresh_token, headers.https, None));
-    res.status_code(StatusCode::NO_CONTENT);
+    res.render(Redirect::temporary(headers.build_url(&strip_oauth_params(&headers.uri))));
 }
 
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
@@ -522,9 +522,16 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
     };
 
     let provider_metadata =
-        CoreProviderMetadata::discover_async(oidc_provider.issuer_url.clone(), get_http_client())
+        match CoreProviderMetadata::discover_async(oidc_provider.issuer_url.clone(), get_http_client())
             .await
-            .unwrap();
+        {
+            Ok(meta) => meta,
+            Err(_) => {
+                return res
+                    .status_code(StatusCode::BAD_GATEWAY)
+                    .render(Text::Plain("Failed to discover OIDC provider metadata."));
+            }
+        };
 
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
