@@ -139,7 +139,6 @@ fn token_expires_soon(token: &str, threshold_secs: i64) -> bool {
 
 fn can_redirect_to_login(req: &Request) -> bool {
     let headers = req.headers();
-
     if let Some(mode) = headers.get("sec-fetch-mode").and_then(|v| v.to_str().ok()) {
         if mode.eq_ignore_ascii_case("navigate") {
             return true;
