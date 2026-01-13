@@ -356,9 +356,9 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
     {
         Ok(v) => v,
         Err(_) => {
-            res.add_cookie(clear_cookie(ACCESS_TOKEN_COOKIE_NAME));
-            res.add_cookie(clear_cookie(REFRESH_TOKEN_COOKIE_NAME));
-            // Only redirect for navigation requests, return 401 for AJAX to prevent CORS errors
+            // Don't clear cookies on refresh failure - a parallel request might have succeeded.
+            // The next request will either use the new token or retry the refresh.
+            // Only redirect for navigation requests, return 401 for AJAX to prevent CORS errors.
             if can_redirect_to_login(req) {
                 res.render(Redirect::temporary(headers.build_url(&strip_oauth_params(&headers.uri))));
             } else {
