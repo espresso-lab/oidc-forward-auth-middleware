@@ -6,3 +6,9 @@ type: application
 # Overwritten by build script to current tag
 version: "0"
 appVersion: "0"
+
+dependencies:
+  - name: valkey
+    version: "5.x.x"
+    repository: "oci://registry-1.docker.io/bitnamicharts"
+    condition: sessionStore.enabled

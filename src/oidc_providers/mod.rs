@@ -81,7 +81,7 @@ impl OIDCProviders {
             providers: HashMap::new(),
         };
 
-        let _ = providers.load_from_env().await;
+        let () = providers.load_from_env().await;
         let _ = providers.load_from_k8s().await;
 
         providers
@@ -91,17 +91,31 @@ impl OIDCProviders {
         info!("Starting to initialize OIDC providers from ENV.");
 
         for i in 0u32.. {
-            let hostname = env::var(format!("OIDC_PROVIDER_{}_HOSTNAME", i)).map(|s| s.to_lowercase());
-            let issuer_url = env::var(format!("OIDC_PROVIDER_{}_ISSUER_URL", i));
-            let client_id = env::var(format!("OIDC_PROVIDER_{}_CLIENT_ID", i));
-            let client_secret = env::var(format!("OIDC_PROVIDER_{}_CLIENT_SECRET", i));
-            let scopes = env::var(format!("OIDC_PROVIDER_{}_SCOPES", i));
-            let audience = env::var(format!("OIDC_PROVIDER_{}_AUDIENCE", i));
+            let hostname =
+                env::var(format!("OIDC_PROVIDER_{i}_HOSTNAME")).map(|s| s.to_lowercase());
+            let issuer_url = env::var(format!("OIDC_PROVIDER_{i}_ISSUER_URL"));
+            let client_id = env::var(format!("OIDC_PROVIDER_{i}_CLIENT_ID"));
+            let client_secret = env::var(format!("OIDC_PROVIDER_{i}_CLIENT_SECRET"));
+            let scopes = env::var(format!("OIDC_PROVIDER_{i}_SCOPES"));
+            let audience = env::var(format!("OIDC_PROVIDER_{i}_AUDIENCE"));
 
-            let (Ok(hostname), Ok(issuer_url), Ok(client_id), Ok(client_secret), Ok(scopes), Ok(audience)) =
-                (hostname, issuer_url, client_id, client_secret, scopes, audience)
+            let (
+                Ok(hostname),
+                Ok(issuer_url),
+                Ok(client_id),
+                Ok(client_secret),
+                Ok(scopes),
+                Ok(audience),
+            ) = (
+                hostname,
+                issuer_url,
+                client_id,
+                client_secret,
+                scopes,
+                audience,
+            )
             else {
-                debug!("OIDC provider init: Environment variable set with counter {} is incomplete. Stopping here.", i);
+                debug!("OIDC provider init: Environment variable set with counter {i} is incomplete. Stopping here.");
                 break;
             };
 
@@ -121,7 +135,7 @@ impl OIDCProviders {
         }
 
         if self.providers.is_empty() {
-            warn!("No OIDC providers initialized. Please check environment variables.")
+            warn!("No OIDC providers initialized. Please check environment variables.");
         } else {
             info!("Initialized {} OIDC providers.", self.providers.len());
         }
@@ -131,13 +145,13 @@ impl OIDCProviders {
         // Exit if this is not running in K8s
         if env::var("KUBERNETES_SERVICE_HOST").is_err() {
             return Ok(());
-        } else {
-            info!("Starting to initialize OIDC providers from K8s.");
         }
+
+        info!("Starting to initialize OIDC providers from K8s.");
 
         let k8s_providers = K8sIngressProvider::discover_all().await?;
 
-        for k8s_provider in k8s_providers.iter() {
+        for k8s_provider in &k8s_providers {
             let oidc_provider = OIDCProvider::new(
                 k8s_provider.issuer_url.clone(),
                 k8s_provider.client_id.clone(),

@@ -41,6 +41,14 @@ spec:
               value: "{{ .Values.config.logLevel }}"
             - name: DISABLE_ENHANCED_SECURITY
               value: "{{ .Values.config.disableEnhancedSecurity }}"
+            {{- if .Values.sessionStore.enabled }}
+            - name: REDIS_URL
+              {{- if .Values.sessionStore.externalUrl }}
+              value: "{{ .Values.sessionStore.externalUrl }}"
+              {{- else }}
+              value: "redis://{{ include "oidc-forward-auth-middleware.fullname" . }}-valkey-master:6379"
+              {{- end }}
+            {{- end }}
             {{- range $i, $value := .Values.oidcProviders }}
             - name: "OIDC_PROVIDER_{{ $i }}_HOSTNAME"
               value: "{{ $value.ingressHostname }}"
