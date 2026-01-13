@@ -46,7 +46,7 @@ spec:
               {{- if .Values.sessionStore.externalUrl }}
               value: "{{ .Values.sessionStore.externalUrl }}"
               {{- else }}
-              value: "redis://{{ include "oidc-forward-auth-middleware.fullname" . }}-valkey-master:6379"
+              value: "redis://{{ include "oidc-forward-auth-middleware.fullname" . }}-valkey-primary:6379"
               {{- end }}
             {{- end }}
             {{- range $i, $value := .Values.oidcProviders }}
