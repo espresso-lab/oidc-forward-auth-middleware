@@ -140,6 +140,12 @@ fn token_expires_soon(token: &str, threshold_secs: i64) -> bool {
 fn can_redirect_to_login(req: &Request) -> bool {
     let headers = req.headers();
 
+    // Debug: Log incoming headers for request detection
+    let sfm = headers.get("sec-fetch-mode").and_then(|v| v.to_str().ok()).unwrap_or("(none)");
+    let sfd = headers.get("sec-fetch-dest").and_then(|v| v.to_str().ok()).unwrap_or("(none)");
+    let accept = headers.get("accept").and_then(|v| v.to_str().ok()).unwrap_or("(none)");
+    info!("Request detection - Sec-Fetch-Mode: {}, Sec-Fetch-Dest: {}, Accept: {}", sfm, sfd, accept);
+
     if let Some(mode) = headers.get("sec-fetch-mode").and_then(|v| v.to_str().ok()) {
         if mode.eq_ignore_ascii_case("navigate") {
             return true;
