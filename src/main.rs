@@ -131,6 +131,12 @@ fn extract_jwt_expiry(token: &str) -> Option<i64> {
     Some(exp - now)
 }
 
+fn token_expires_soon(token: &str, threshold_secs: i64) -> bool {
+    extract_jwt_expiry(token)
+        .map(|remaining| remaining < threshold_secs)
+        .unwrap_or(true)
+}
+
 fn strip_oauth_params(uri: &str) -> String {
     if let Some(query_start) = uri.find('?') {
         let path = &uri[..query_start];
@@ -339,9 +345,7 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
     let access_expiry = extract_jwt_expiry(&access_token);
     res.add_cookie(make_token_cookie(ACCESS_TOKEN_COOKIE_NAME, &access_token, headers.https, access_expiry));
     res.add_cookie(make_token_cookie(REFRESH_TOKEN_COOKIE_NAME, &refresh_token, headers.https, None));
-
-    let clean_uri = strip_oauth_params(&headers.uri);
-    res.render(Redirect::temporary(headers.build_url(&clean_uri)));
+    res.status_code(StatusCode::NO_CONTENT);
 }
 
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
@@ -349,6 +353,11 @@ fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
     let token = get_cookie(req, ACCESS_TOKEN_COOKIE_NAME);
 
     if token.is_empty() {
+        return false;
+    }
+
+    let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
+    if !refresh_token.is_empty() && token_expires_soon(&token, 60) {
         return false;
     }
 
