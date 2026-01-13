@@ -137,6 +137,50 @@ fn token_expires_soon(token: &str, threshold_secs: i64) -> bool {
         .unwrap_or(true)
 }
 
+fn can_redirect_to_login(req: &Request) -> bool {
+    let headers = req.headers();
+
+    if let Some(mode) = headers.get("sec-fetch-mode").and_then(|v| v.to_str().ok()) {
+        if mode.eq_ignore_ascii_case("navigate") {
+            return true;
+        }
+
+        if mode.eq_ignore_ascii_case("cors")
+            || mode.eq_ignore_ascii_case("no-cors") 
+            || mode.eq_ignore_ascii_case("same-origin") 
+        {
+            return false;
+        }
+    }
+
+    if let Some(dest) = headers.get("sec-fetch-dest").and_then(|v| v.to_str().ok()) {
+        if dest.eq_ignore_ascii_case("document") {
+            return true;
+        }
+
+        if dest.eq_ignore_ascii_case("script")
+            || dest.eq_ignore_ascii_case("style")
+            || dest.eq_ignore_ascii_case("image")
+            || dest.eq_ignore_ascii_case("font")
+            || dest.eq_ignore_ascii_case("empty")
+        {
+            return false;
+        }
+    }
+
+    if let Some(accept) = headers.get("accept").and_then(|v| v.to_str().ok()) {
+        if accept.contains("application/json") && !accept.contains("text/html") {
+            return false;
+        }
+
+        if accept.contains("text/html") || accept.contains("application/xhtml+xml") {
+            return true;
+        }
+    }
+
+    true
+}
+
 fn strip_oauth_params(uri: &str) -> String {
     if let Some(query_start) = uri.find('?') {
         let path = &uri[..query_start];
@@ -254,6 +298,11 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response, depot: &mut
         return;
     }
 
+    if !can_redirect_to_login(req) {
+        res.status_code(StatusCode::UNAUTHORIZED);
+        return;
+    }
+
     start_auth_flow(client, headers, scopes, res);
 }
 
@@ -310,7 +359,12 @@ async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut D
         Err(_) => {
             res.add_cookie(clear_cookie(ACCESS_TOKEN_COOKIE_NAME));
             res.add_cookie(clear_cookie(REFRESH_TOKEN_COOKIE_NAME));
-            res.render(Redirect::temporary(headers.build_url(&strip_oauth_params(&headers.uri))));
+            // Only redirect for navigation requests, return 401 for AJAX to prevent CORS errors
+            if can_redirect_to_login(req) {
+                res.render(Redirect::temporary(headers.build_url(&strip_oauth_params(&headers.uri))));
+            } else {
+                res.status_code(StatusCode::UNAUTHORIZED);
+            }
             return;
         }
     };
