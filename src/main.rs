@@ -1,12 +1,13 @@
 mod oidc_providers;
 mod salvo_utils;
+mod session_store;
 
 use std::env;
 use std::sync::OnceLock;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use jsonwebtoken::{decode as jwt_decode, decode_header, DecodingKey, Validation};
-use oidc_providers::{get_http_client, OIDCProviders};
+use oidc_providers::{get_http_client, OIDCProvider, OIDCProviders};
 use openidconnect::core::{CoreClient, CoreProviderMetadata, CoreResponseType};
 use openidconnect::{
     AuthenticationFlow, AuthorizationCode, CsrfToken, EndpointMaybeSet, EndpointNotSet,
@@ -14,7 +15,10 @@ use openidconnect::{
     RefreshToken, Scope,
 };
 use rustls::crypto::ring::default_provider;
-use salvo::http::cookie::{Cookie, SameSite, time::{Duration, OffsetDateTime}};
+use salvo::http::cookie::{
+    time::{Duration, OffsetDateTime},
+    Cookie, SameSite,
+};
 use salvo::http::{HeaderValue, StatusCode};
 use salvo::logging::Logger;
 use salvo::prelude::{
@@ -24,6 +28,7 @@ use salvo::routing::PathState;
 use salvo::{Listener, Service};
 use salvo_utils::{get_cookie, get_header, get_query_param, security_middleware};
 use serde::{Deserialize, Serialize};
+use session_store::Session;
 use tracing::info;
 use urlencoding::decode;
 
@@ -39,6 +44,7 @@ type ConfiguredCoreClient = CoreClient<
 static PROVIDERS: OnceLock<OIDCProviders> = OnceLock::new();
 static ACCESS_TOKEN_COOKIE_NAME: &str = "x_oidc_access_token";
 static REFRESH_TOKEN_COOKIE_NAME: &str = "x_oidc_refresh_token";
+static SESSION_COOKIE_NAME: &str = "x_oidc_session";
 static CSRF_COOKIE_PREFIX: &str = "x_oidc_csrf_";
 static PKCE_COOKIE_PREFIX: &str = "x_oidc_pkce_";
 
@@ -97,25 +103,39 @@ fn make_auth_flow_cookie(name: &str, value: &str, https: bool) -> Cookie<'static
         .build()
 }
 
-fn make_token_cookie(name: &str, value: &str, https: bool, expires_in_secs: Option<i64>) -> Cookie<'static> {
+fn make_token_cookie(
+    name: &str,
+    value: &str,
+    https: bool,
+    expires_in_secs: Option<i64>,
+) -> Cookie<'static> {
     let mut builder = Cookie::build((name.to_owned(), value.to_owned()))
         .path("/")
         .secure(https)
         .http_only(true)
         .same_site(SameSite::Lax);
-    
+
     if let Some(secs) = expires_in_secs {
         builder = builder.expires(OffsetDateTime::now_utc() + Duration::seconds(secs));
     }
-    
+
     builder.build()
 }
 
 fn clear_cookie(name: &str) -> Cookie<'static> {
-    Cookie::build((name.to_owned(), "".to_owned()))
+    Cookie::build((name.to_owned(), String::new()))
         .path("/")
         .same_site(SameSite::Lax)
         .expires(OffsetDateTime::now_utc() - Duration::hours(1))
+        .build()
+}
+
+fn make_session_cookie(session_id: &str, https: bool) -> Cookie<'static> {
+    Cookie::build((SESSION_COOKIE_NAME.to_owned(), session_id.to_owned()))
+        .path("/")
+        .secure(https)
+        .http_only(true)
+        .same_site(SameSite::Lax)
         .build()
 }
 
@@ -139,8 +159,8 @@ fn can_redirect_to_login(req: &Request) -> bool {
         }
 
         if mode.eq_ignore_ascii_case("cors")
-            || mode.eq_ignore_ascii_case("no-cors") 
-            || mode.eq_ignore_ascii_case("same-origin") 
+            || mode.eq_ignore_ascii_case("no-cors")
+            || mode.eq_ignore_ascii_case("same-origin")
         {
             return false;
         }
@@ -251,8 +271,7 @@ fn start_auth_flow(
     if let Some(pos) = redirect_url.find("&state=") {
         let end_pos = redirect_url[pos + 7..]
             .find('&')
-            .map(|p| pos + 7 + p)
-            .unwrap_or(redirect_url.len());
+            .map_or(redirect_url.len(), |p| pos + 7 + p);
         redirect_url = format!(
             "{}&state={}{}",
             &redirect_url[..pos],
@@ -267,7 +286,7 @@ fn start_auth_flow(
 #[handler]
 async fn forward_auth_handler(req: &mut Request, res: &mut Response, depot: &mut Depot) {
     let client = depot.obtain::<ConfiguredCoreClient>().unwrap();
-    let scopes = depot.obtain::<Vec<Scope>>().unwrap().to_owned();
+    let scopes = depot.obtain::<Vec<Scope>>().unwrap().clone();
     let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
 
     let uri = get_header(req, "x-forwarded-uri");
@@ -281,12 +300,12 @@ async fn forward_auth_handler(req: &mut Request, res: &mut Response, depot: &mut
                 res.add_cookie(clear_cookie(name));
             }
         }
-        
+
         let redirect_path = OAuthState::decode(&state)
             .map(|s| s.redirect_uri)
             .filter(|uri| !uri.is_empty() && !uri.contains("code="))
             .unwrap_or_else(|| strip_oauth_params(&headers.uri));
-        
+
         res.render(Redirect::temporary(headers.build_url(&redirect_path)));
         return;
     }
@@ -310,137 +329,371 @@ struct Claims {
     exp: usize,
 }
 
-#[handler]
-async fn ok_handler(req: &mut Request, res: &mut Response) {
-    let headers = res.headers_mut();
-    let sub_header = req.headers().get("X-Forwarded-User");
+/// Validate a JWT access token against the OIDC provider's JWKS
+fn validate_session_token(access_token: &str, oidc_provider: &OIDCProvider) -> Result<Claims, ()> {
+    let header = decode_header(access_token).map_err(|_| ())?;
+    let key_id = header.kid.ok_or(())?;
 
-    if let Some(sub) = sub_header {
-        headers.insert("X-Forwarded-User", sub.to_owned());
+    let jwk = oidc_provider
+        .jwks
+        .keys
+        .iter()
+        .find(|k| k.common.key_id.as_ref().is_some_and(|s| s == &key_id))
+        .ok_or(())?;
+
+    let key = DecodingKey::from_jwk(jwk).map_err(|_| ())?;
+
+    let mut validation = Validation::new(header.alg);
+    validation.set_audience(&oidc_provider.audience);
+    validation.set_issuer(&[oidc_provider.issuer_url.as_str()]);
+
+    let token_data = jwt_decode::<Claims>(access_token, &key, &validation).map_err(|_| ())?;
+    Ok(token_data.claims)
+}
+
+/// Inline token refresh with distributed locking (for AJAX requests)
+async fn inline_refresh_token(
+    session_id: &str,
+    session: &mut Session,
+    depot: &Depot,
+) -> Result<String, ()> {
+    // Try to acquire refresh lock
+    let acquired = session_store::acquire_refresh_lock(session_id).await;
+
+    if !acquired {
+        // Another request is refreshing, wait for it to complete
+        match session_store::wait_for_refresh(session_id).await {
+            Some(updated_session) => {
+                *session = updated_session.clone();
+                return Ok(updated_session.access_token);
+            }
+            None => return Err(()),
+        }
+    }
+
+    // We have the lock, perform the refresh
+    let client = depot.obtain::<ConfiguredCoreClient>().map_err(|_| ())?;
+    let scopes = depot.obtain::<Vec<Scope>>().map_err(|_| ())?.clone();
+
+    let Ok(token_response) = client
+        .exchange_refresh_token(&RefreshToken::new(session.refresh_token.clone()))
+        .map_err(|_| ())?
+        .add_scopes(scopes)
+        .request_async(get_http_client())
+        .await
+    else {
+        // Refresh failed, delete session and release lock
+        session_store::delete_session(session_id).await;
+        session_store::release_refresh_lock(session_id).await;
+        return Err(());
+    };
+
+    let new_access_token = token_response.access_token().secret().to_owned();
+    let Some(rt) = token_response.refresh_token() else {
+        session_store::release_refresh_lock(session_id).await;
+        return Err(());
+    };
+    let new_refresh_token = rt.secret().to_owned();
+
+    // Update session with new tokens
+    let updated_session = Session {
+        access_token: new_access_token.clone(),
+        refresh_token: new_refresh_token,
+        hostname: session.hostname.clone(),
+    };
+
+    if !session_store::update_session(session_id, &updated_session).await {
+        session_store::release_refresh_lock(session_id).await;
+        return Err(());
+    }
+
+    // Update the session reference and release lock
+    *session = updated_session;
+    session_store::release_refresh_lock(session_id).await;
+
+    Ok(new_access_token)
+}
+
+#[handler]
+async fn ok_handler(req: &mut Request, res: &mut Response, depot: &mut Depot) {
+    // In session store mode, we need to validate the JWT here (async)
+    if session_store::is_enabled() {
+        let session_id = get_cookie(req, SESSION_COOKIE_NAME);
+        let Some(mut session) = session_store::get_session(&session_id).await else {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        };
+
+        let hostname = get_header(req, "x-forwarded-host");
+        let Some(oidc_provider) = PROVIDERS.get().unwrap().find_by_hostname(&hostname) else {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        };
+
+        // Try to validate JWT from session
+        let validation_result = validate_session_token(&session.access_token, oidc_provider);
+
+        let sub = if let Ok(claims) = validation_result {
+            claims.sub
+        } else {
+            // Token invalid/expired - try inline refresh with distributed locking
+            let Ok(new_access_token) = inline_refresh_token(&session_id, &mut session, depot).await
+            else {
+                res.status_code(StatusCode::UNAUTHORIZED);
+                return;
+            };
+            // Re-validate with new token
+            let Ok(claims) = validate_session_token(&new_access_token, oidc_provider) else {
+                res.status_code(StatusCode::UNAUTHORIZED);
+                return;
+            };
+            claims.sub
+        };
+
+        let headers = res.headers_mut();
+        headers.insert("X-Forwarded-User", HeaderValue::from_str(&sub).unwrap());
+    } else {
+        // Cookie mode: X-Forwarded-User already set by check_cookie filter
+        let headers = res.headers_mut();
+        let sub_header = req.headers().get("X-Forwarded-User");
+
+        if let Some(sub) = sub_header {
+            headers.insert("X-Forwarded-User", sub.to_owned());
+        }
     }
 
     res.status_code(StatusCode::NO_CONTENT);
 }
 
 fn has_refresh_token(req: &mut Request, _state: &mut PathState) -> bool {
-    let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
-    !refresh_token.is_empty() && can_redirect_to_login(req)
+    if session_store::is_enabled() {
+        // In session mode, check for session cookie - the session has refresh token stored
+        let session_id = get_cookie(req, SESSION_COOKIE_NAME);
+        !session_id.is_empty() && can_redirect_to_login(req)
+    } else {
+        let refresh_token = get_cookie(req, REFRESH_TOKEN_COOKIE_NAME);
+        !refresh_token.is_empty() && can_redirect_to_login(req)
+    }
 }
 
 #[handler]
 async fn renew_access_token(req: &mut Request, res: &mut Response, depot: &mut Depot) {
-    let refresh_token = match decode(&get_cookie(req, REFRESH_TOKEN_COOKIE_NAME)) {
-        Ok(v) => v.to_string(),
-        Err(_) => {
+    let client = depot.obtain::<ConfiguredCoreClient>().unwrap();
+    let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
+    let scopes = depot.obtain::<Vec<Scope>>().unwrap().clone();
+
+    if session_store::is_enabled() {
+        // Session store mode with distributed locking
+        let session_id = get_cookie(req, SESSION_COOKIE_NAME);
+        if session_id.is_empty() {
             res.status_code(StatusCode::UNAUTHORIZED);
             return;
         }
-    };
 
-    let client = depot.obtain::<ConfiguredCoreClient>().unwrap();
-    let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
-    let scopes = depot.obtain::<Vec<Scope>>().unwrap().to_owned();
+        // Try to acquire refresh lock
+        let acquired = session_store::acquire_refresh_lock(&session_id).await;
 
-    let token_response = match client
-        .exchange_refresh_token(&RefreshToken::new(refresh_token.to_owned()))
-        .unwrap()
-        .add_scopes(scopes.clone())
-        .request_async(get_http_client())
-        .await
-    {
-        Ok(v) => v,
-        Err(_) => {
+        if !acquired {
+            // Another request is refreshing, wait for it to complete
+            if session_store::wait_for_refresh(&session_id).await.is_some() {
+                // Refresh completed by another request, redirect to retry
+                res.render(Redirect::temporary(
+                    headers.build_url(&strip_oauth_params(&headers.uri)),
+                ));
+            } else {
+                // Session was deleted or timeout, need to re-login
+                if can_redirect_to_login(req) {
+                    res.render(Redirect::temporary(
+                        headers.build_url(&strip_oauth_params(&headers.uri)),
+                    ));
+                } else {
+                    res.status_code(StatusCode::UNAUTHORIZED);
+                }
+            }
+            return;
+        }
+
+        // We have the lock, perform the refresh
+        let Some(session) = session_store::get_session(&session_id).await else {
+            session_store::release_refresh_lock(&session_id).await;
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        };
+
+        let Ok(token_response) = client
+            .exchange_refresh_token(&RefreshToken::new(session.refresh_token.clone()))
+            .unwrap()
+            .add_scopes(scopes.clone())
+            .request_async(get_http_client())
+            .await
+        else {
+            // Refresh failed, delete session and release lock
+            session_store::delete_session(&session_id).await;
+            session_store::release_refresh_lock(&session_id).await;
             if can_redirect_to_login(req) {
-                res.render(Redirect::temporary(headers.build_url(&strip_oauth_params(&headers.uri))));
+                res.render(Redirect::temporary(
+                    headers.build_url(&strip_oauth_params(&headers.uri)),
+                ));
             } else {
                 res.status_code(StatusCode::UNAUTHORIZED);
             }
             return;
-        }
-    };
+        };
 
-    let access_token = match decode(token_response.access_token().secret()) {
-        Ok(v) => v.into_owned(),
-        Err(_) => {
+        let Ok(new_access_token) =
+            decode(token_response.access_token().secret()).map(std::borrow::Cow::into_owned)
+        else {
+            session_store::release_refresh_lock(&session_id).await;
             res.status_code(StatusCode::UNAUTHORIZED);
             return;
-        }
-    };
+        };
 
-    let refresh_token = match token_response.refresh_token() {
-        Some(rt) => match decode(rt.secret()) {
-            Ok(v) => v.into_owned(),
-            Err(_) => {
+        let Some(rt) = token_response.refresh_token() else {
+            session_store::release_refresh_lock(&session_id).await;
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        };
+        let Ok(new_refresh_token) = decode(rt.secret()).map(std::borrow::Cow::into_owned) else {
+            session_store::release_refresh_lock(&session_id).await;
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        };
+
+        // Update session with new tokens
+        let updated_session = Session {
+            access_token: new_access_token,
+            refresh_token: new_refresh_token,
+            hostname: session.hostname.clone(),
+        };
+
+        if !session_store::update_session(&session_id, &updated_session).await {
+            session_store::release_refresh_lock(&session_id).await;
+            eprintln!("Failed to update session");
+            res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
+            return;
+        }
+
+        // Release lock and redirect
+        session_store::release_refresh_lock(&session_id).await;
+        res.render(Redirect::temporary(
+            headers.build_url(&strip_oauth_params(&headers.uri)),
+        ));
+    } else {
+        // Cookie mode - original behavior
+        let Ok(refresh_token) =
+            decode(&get_cookie(req, REFRESH_TOKEN_COOKIE_NAME)).map(|v| v.to_string())
+        else {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        };
+
+        let Ok(token_response) = client
+            .exchange_refresh_token(&RefreshToken::new(refresh_token.clone()))
+            .unwrap()
+            .add_scopes(scopes.clone())
+            .request_async(get_http_client())
+            .await
+        else {
+            if can_redirect_to_login(req) {
+                res.render(Redirect::temporary(
+                    headers.build_url(&strip_oauth_params(&headers.uri)),
+                ));
+            } else {
                 res.status_code(StatusCode::UNAUTHORIZED);
-                return;
             }
-        },
-        None => {
+            return;
+        };
+
+        let Ok(access_token) =
+            decode(token_response.access_token().secret()).map(std::borrow::Cow::into_owned)
+        else {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        };
+
+        let Some(rt) = token_response.refresh_token() else {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        };
+        let Ok(refresh_token) = decode(rt.secret()).map(std::borrow::Cow::into_owned) else {
+            res.status_code(StatusCode::UNAUTHORIZED);
+            return;
+        };
+
+        if access_token.is_empty() {
             res.status_code(StatusCode::UNAUTHORIZED);
             return;
         }
-    };
 
-    if access_token.is_empty() {
-        res.status_code(StatusCode::UNAUTHORIZED);
-        return;
+        let access_expiry = extract_jwt_expiry(&access_token);
+        res.add_cookie(make_token_cookie(
+            ACCESS_TOKEN_COOKIE_NAME,
+            &access_token,
+            headers.https,
+            access_expiry,
+        ));
+        res.add_cookie(make_token_cookie(
+            REFRESH_TOKEN_COOKIE_NAME,
+            &refresh_token,
+            headers.https,
+            None,
+        ));
+        res.render(Redirect::temporary(
+            headers.build_url(&strip_oauth_params(&headers.uri)),
+        ));
     }
-
-    let access_expiry = extract_jwt_expiry(&access_token);
-    res.add_cookie(make_token_cookie(ACCESS_TOKEN_COOKIE_NAME, &access_token, headers.https, access_expiry));
-    res.add_cookie(make_token_cookie(REFRESH_TOKEN_COOKIE_NAME, &refresh_token, headers.https, None));
-    res.render(Redirect::temporary(headers.build_url(&strip_oauth_params(&headers.uri))));
 }
 
 fn check_cookie(req: &mut Request, _state: &mut PathState) -> bool {
-    let hostname = get_header(req, "x-forwarded-host");
-    let token = get_cookie(req, ACCESS_TOKEN_COOKIE_NAME);
+    if session_store::is_enabled() {
+        !get_cookie(req, SESSION_COOKIE_NAME).is_empty()
+    } else {
+        let hostname = get_header(req, "x-forwarded-host");
+        let token = get_cookie(req, ACCESS_TOKEN_COOKIE_NAME);
 
-    if token.is_empty() {
-        return false;
+        if token.is_empty() {
+            return false;
+        }
+
+        let Some(oidc_provider) = PROVIDERS.get().unwrap().find_by_hostname(&hostname) else {
+            return false;
+        };
+
+        let Ok(header) = decode_header(&token) else {
+            return false;
+        };
+
+        let Some(key_id) = header.kid else {
+            return false;
+        };
+
+        let Some(jwk) = oidc_provider
+            .jwks
+            .keys
+            .iter()
+            .find(|k| k.common.key_id.as_ref().is_some_and(|s| s == &key_id))
+        else {
+            return false;
+        };
+
+        let Ok(key) = DecodingKey::from_jwk(jwk) else {
+            return false;
+        };
+
+        let mut validation = Validation::new(header.alg);
+        validation.set_audience(&oidc_provider.audience);
+        validation.set_issuer(&[oidc_provider.issuer_url.as_str()]);
+
+        let Ok(claims) = jwt_decode::<Claims>(&token, &key, &validation) else {
+            return false;
+        };
+
+        let sub = claims.claims.sub;
+        let headers = req.headers_mut();
+        headers.insert("X-Forwarded-User", HeaderValue::from_str(&sub).unwrap());
+
+        true
     }
-
-    let oidc_provider = match PROVIDERS.get().unwrap().find_by_hostname(&hostname) {
-        Some(val) => val,
-        None => return false,
-    };
-
-    let header = match decode_header(&token) {
-        Ok(val) => val,
-        Err(_) => return false,
-    };
-
-    let key_id = match header.kid {
-        Some(kid) => kid,
-        None => return false,
-    };
-
-    let jwk = match oidc_provider.jwks.keys.iter().find(|k| {
-        k.common.key_id.as_ref().is_some_and(|s| s == &key_id)
-    }) {
-        Some(val) => val,
-        _ => return false,
-    };
-
-    let key = match DecodingKey::from_jwk(jwk) {
-        Ok(k) => k,
-        Err(_) => return false,
-    };
-
-    let mut validation = Validation::new(header.alg);
-    validation.set_audience(&oidc_provider.audience);
-    validation.set_issuer(&[oidc_provider.issuer_url.as_str()]);
-
-    let claims = match jwt_decode::<Claims>(&token, &key, &validation) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let sub = claims.claims.sub;
-    let headers = req.headers_mut();
-    headers.insert("X-Forwarded-User", HeaderValue::from_str(&sub).unwrap());
-
-    true
 }
 
 fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
@@ -452,14 +705,12 @@ fn check_params(req: &mut Request, _state: &mut PathState) -> bool {
         return false;
     }
 
-    let oauth_state = match OAuthState::decode(&state) {
-        Some(s) => s,
-        None => return false,
+    let Some(oauth_state) = OAuthState::decode(&state) else {
+        return false;
     };
 
-    let csrf_cookie = match find_csrf_cookie(req) {
-        Some((_, value)) => value,
-        None => return false,
+    let Some((_, csrf_cookie)) = find_csrf_cookie(req) else {
+        return false;
     };
 
     oauth_state.csrf == csrf_cookie
@@ -475,40 +726,33 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
 
     let redirect_to_clean_url = || headers.build_url(&strip_oauth_params(&headers.uri));
 
-    let (pkce_cookie_name, pkce_verifier) = match find_pkce_cookie(req) {
-        Some((name, value)) => (name, value),
-        None => {
-            res.render(Redirect::temporary(redirect_to_clean_url()));
-            return;
-        }
+    let Some((pkce_cookie_name, pkce_verifier)) = find_pkce_cookie(req) else {
+        res.render(Redirect::temporary(redirect_to_clean_url()));
+        return;
     };
 
-    let csrf_cookie_name = match find_csrf_cookie(req) {
-        Some((name, _)) => name,
-        None => String::new(),
-    };
+    let csrf_cookie_name = find_csrf_cookie(req)
+        .map(|(name, _)| name)
+        .unwrap_or_default();
 
     if code.is_empty() {
         res.render(Redirect::temporary(redirect_to_clean_url()));
         return;
     }
 
-    let token_response = match client
+    let Ok(token_response) = client
         .exchange_code(AuthorizationCode::new(code))
         .unwrap()
         .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier))
         .request_async(get_http_client())
         .await
-    {
-        Ok(tr) => tr,
-        Err(_) => {
-            res.add_cookie(clear_cookie(&pkce_cookie_name));
-            if !csrf_cookie_name.is_empty() {
-                res.add_cookie(clear_cookie(&csrf_cookie_name));
-            }
-            res.render(Redirect::temporary(redirect_to_clean_url()));
-            return;
+    else {
+        res.add_cookie(clear_cookie(&pkce_cookie_name));
+        if !csrf_cookie_name.is_empty() {
+            res.add_cookie(clear_cookie(&csrf_cookie_name));
         }
+        res.render(Redirect::temporary(redirect_to_clean_url()));
+        return;
     };
 
     let access_token = token_response.access_token().secret().to_owned();
@@ -517,11 +761,42 @@ async fn set_cookie(req: &mut Request, res: &mut Response, depot: &mut Depot) {
         None => String::new(),
     };
 
-    let access_expiry = extract_jwt_expiry(&access_token);
-    res.add_cookie(make_token_cookie(ACCESS_TOKEN_COOKIE_NAME, &access_token, headers.https, access_expiry));
+    if session_store::is_enabled() {
+        // Session store mode: create session and set session cookie
+        let session = Session {
+            access_token: access_token.clone(),
+            refresh_token: refresh_token.clone(),
+            hostname: headers.host.clone(),
+        };
+        if let Some(session_id) = session_store::create_session(&session).await {
+            res.add_cookie(make_session_cookie(&session_id, headers.https));
+        } else {
+            eprintln!("Failed to create session");
+            res.add_cookie(clear_cookie(&pkce_cookie_name));
+            if !csrf_cookie_name.is_empty() {
+                res.add_cookie(clear_cookie(&csrf_cookie_name));
+            }
+            res.render(Redirect::temporary(redirect_to_clean_url()));
+            return;
+        }
+    } else {
+        // Cookie mode: set token cookies directly
+        let access_expiry = extract_jwt_expiry(&access_token);
+        res.add_cookie(make_token_cookie(
+            ACCESS_TOKEN_COOKIE_NAME,
+            &access_token,
+            headers.https,
+            access_expiry,
+        ));
 
-    if !refresh_token.is_empty() {
-        res.add_cookie(make_token_cookie(REFRESH_TOKEN_COOKIE_NAME, &refresh_token, headers.https, None));
+        if !refresh_token.is_empty() {
+            res.add_cookie(make_token_cookie(
+                REFRESH_TOKEN_COOKIE_NAME,
+                &refresh_token,
+                headers.https,
+                None,
+            ));
+        }
     }
 
     res.add_cookie(clear_cookie(&pkce_cookie_name));
@@ -547,30 +822,24 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
         uri: get_header(req, "x-forwarded-uri"),
     };
 
-    let oidc_provider = match PROVIDERS
+    let Some(oidc_provider) = PROVIDERS
         .get()
         .unwrap()
         .find_by_hostname(&forward_headers.host)
-    {
-        Some(val) => val,
-        None => {
-            return res
-                .status_code(StatusCode::INTERNAL_SERVER_ERROR)
-                .render(Text::Plain("No OIDC provider found for hostname."));
-        }
+    else {
+        return res
+            .status_code(StatusCode::INTERNAL_SERVER_ERROR)
+            .render(Text::Plain("No OIDC provider found for hostname."));
     };
 
-    let provider_metadata =
-        match CoreProviderMetadata::discover_async(oidc_provider.issuer_url.clone(), get_http_client())
+    let Ok(provider_metadata) =
+        CoreProviderMetadata::discover_async(oidc_provider.issuer_url.clone(), get_http_client())
             .await
-        {
-            Ok(meta) => meta,
-            Err(_) => {
-                return res
-                    .status_code(StatusCode::BAD_GATEWAY)
-                    .render(Text::Plain("Failed to discover OIDC provider metadata."));
-            }
-        };
+    else {
+        return res
+            .status_code(StatusCode::BAD_GATEWAY)
+            .render(Text::Plain("Failed to discover OIDC provider metadata."));
+    };
 
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
@@ -595,7 +864,6 @@ async fn apply_oauth2_client(req: &mut Request, res: &mut Response, depot: &mut 
 
 #[tokio::main]
 async fn main() {
-    // Install rustls crypto provider before any TLS operations
     default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");
@@ -606,6 +874,9 @@ async fn main() {
         Ok(val) => !(val.to_lowercase().eq("true") || val.eq("1")),
         Err(_) => true,
     };
+
+    let redis_url = env::var("REDIS_URL").ok();
+    session_store::init_redis(redis_url).await;
 
     let oidc_providers = OIDCProviders::new().await;
     PROVIDERS.get_or_init(move || oidc_providers);

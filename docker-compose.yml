@@ -14,17 +14,27 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
 
+  valkey:
+    image: "valkey/valkey:8-alpine"
+    container_name: "valkey"
+    ports:
+      - "6379:6379"
+
   middleware:
     build: .
     develop:
       watch:
         - path: ./src
           action: rebuild
-    # environment:
     env_file:
       - .env
+    environment:
+      - REDIS_URL=redis://valkey:6379
+    depends_on:
+      - valkey
     ports:
       - 3000:3000
+
   whoami:
     image: "traefik/whoami"
     container_name: "whoami"

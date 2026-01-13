@@ -37,6 +37,27 @@ config:
   logLevel: info # debug, info, warn, error
   disableEnhancedSecurity: "false" # Enhanced security sets HTTP security headers and forces https
 
+# Session store configuration (Redis/Valkey)
+# When enabled, tokens are stored server-side in Redis/Valkey instead of browser cookies.
+# This is required for OIDC providers with single-use refresh tokens (e.g., Kanidm)
+# to avoid race conditions when multiple requests try to refresh the token simultaneously.
+sessionStore:
+  enabled: false
+  # Use an external Redis/Valkey instance (overrides built-in valkey subchart)
+  externalUrl: ""
+  # Example: redis://valkey.default.svc.cluster.local:6379
+
+# Valkey subchart configuration (only used when sessionStore.enabled=true and externalUrl is empty)
+valkey:
+  architecture: standalone
+  auth:
+    enabled: false
+  primary:
+    persistence:
+      enabled: false
+  replica:
+    replicaCount: 0
+
 oidcProviders:
   # - ingressHostname: example.com
   #   issuerUrl: https://id.example.com/oauth/app1

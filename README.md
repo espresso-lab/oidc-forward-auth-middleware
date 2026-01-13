@@ -21,6 +21,12 @@ This container acts as a `ForwardAuth` middleware for the traefik ingress contro
 - Integration with traefik ingress controller
 - Easy to deploy to a Kubernetes environment via Helm or to use it with Docker Compose
 - Simple configuration via environment variables or Helm values
+- **Optional server-side session store** with Redis/Valkey for improved token management
+
+### New features in version 4
+
+- **Session Store**: Optional server-side session storage using Redis/Valkey. This is essential for OIDC providers that use single-use refresh tokens (like Kanidm) to prevent race conditions when multiple concurrent requests attempt to refresh tokens.
+- **Distributed locking**: When session store is enabled, token refresh operations use distributed locks to ensure only one request refreshes the token at a time.
 
 ### New features in version 3
 
@@ -66,6 +72,21 @@ oidcProviders:
     audience: ["app1"]
 ```
 
+#### Enabling Session Store (Recommended for Kanidm and similar providers)
+
+If your OIDC provider uses single-use refresh tokens (e.g., Kanidm), enable the session store to prevent race conditions:
+
+```yaml
+# Enable built-in Valkey instance
+sessionStore:
+  enabled: true
+
+# Or use an external Redis/Valkey instance
+sessionStore:
+  enabled: true
+  externalUrl: "redis://your-redis-host:6379"
+```
+
 Last, enable it in the ingress controller of the service `app.example.com` you would like to protect:
 
 ```yaml
@@ -99,6 +120,7 @@ For the latest example have a look at the `docker-compose.yml` file.
 | ------------------------- | ------- | ------------------------------------------------------------------------------------------ |
 | RUST_LOG                  | String  | info, debug, error, warning                                                                |
 | DISABLE_ENHANCED_SECURITY | Boolean | Default: `false`. Sets various security HTTP headers and redirects http requests to https. |
+| REDIS_URL                 | String  | Optional. Redis/Valkey connection URL for session store. Example: `redis://localhost:6379` |
 
 #### Per OIDC provider
 
@@ -117,10 +139,20 @@ Use `OIDC_PROVIDER_0_*` for the first provider, `OIDC_PROVIDER_1_*` for the seco
 
 The middleware sets the following cookies:
 
+**Without session store (default):**
+
 | Cookie | Purpose | Expiry |
 | ------ | ------- | ------ |
 | `x_oidc_access_token` | JWT access token | Based on JWT `exp` claim |
 | `x_oidc_refresh_token` | Refresh token for silent renewal | Session |
+| `x_oidc_csrf_{nonce}` | CSRF protection during auth flow | 1 hour |
+| `x_oidc_pkce_{nonce}` | PKCE verifier during auth flow | 1 hour |
+
+**With session store enabled:**
+
+| Cookie | Purpose | Expiry |
+| ------ | ------- | ------ |
+| `x_oidc_session` | Session ID (tokens stored server-side) | 24 hours |
 | `x_oidc_csrf_{nonce}` | CSRF protection during auth flow | 1 hour |
 | `x_oidc_pkce_{nonce}` | PKCE verifier during auth flow | 1 hour |
 

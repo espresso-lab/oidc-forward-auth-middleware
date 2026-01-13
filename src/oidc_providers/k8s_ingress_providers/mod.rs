@@ -19,7 +19,7 @@ pub struct K8sIngressProvider {
 impl K8sIngressProvider {
     pub async fn discover_all() -> Result<Vec<Self>, Error> {
         let client = Client::try_default().await?;
-        let ingresses: Api<Ingress> = Api::all(client.to_owned());
+        let ingresses: Api<Ingress> = Api::all(client.clone());
         let lp = ListParams::default();
 
         let mut return_list: Vec<Self> = vec![];
@@ -37,7 +37,7 @@ impl K8sIngressProvider {
                 .is_some()
         });
 
-        for ingress in ingress_list.into_iter() {
+        for ingress in ingress_list {
             info!(
                 "K8s Ingress: {} in namespace {}",
                 ingress.name().unwrap(),
@@ -61,7 +61,8 @@ impl K8sIngressProvider {
             let client_id: String;
             let client_secret: String;
 
-            if let Some(oidc_secret) = annotations.get("oidc.ingress.kubernetes.io/existing-secret") {
+            if let Some(oidc_secret) = annotations.get("oidc.ingress.kubernetes.io/existing-secret")
+            {
                 info!(
                     "Fetching secret {} in namespace {}.",
                     oidc_secret,
@@ -69,15 +70,15 @@ impl K8sIngressProvider {
                 );
 
                 let secret: Secret =
-                    Api::namespaced(client.to_owned(), ingress.namespace().unwrap().as_ref())
+                    Api::namespaced(client.clone(), ingress.namespace().unwrap().as_ref())
                         .get(oidc_secret)
                         .await?;
 
                 if let Some(data) = secret.data {
                     client_id =
-                        String::from_utf8(data.get("client-id").unwrap().0.to_owned()).unwrap();
+                        String::from_utf8(data.get("client-id").unwrap().0.clone()).unwrap();
                     client_secret =
-                        String::from_utf8(data.get("client-secret").unwrap().0.to_owned()).unwrap();
+                        String::from_utf8(data.get("client-secret").unwrap().0.clone()).unwrap();
 
                     info!("Found client_id {} and {}.", &client_id, &client_secret);
                 } else {

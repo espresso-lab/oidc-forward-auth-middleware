@@ -51,7 +51,7 @@ pub async fn security_middleware(req: &mut Request, res: &mut Response) {
         res.render(Redirect::temporary(format!(
             "https://{}/{}",
             get_header(req, "x-forwarded-host"),
-            get_header(req, "x-forwarded-uri").trim_start_matches("/")
+            get_header(req, "x-forwarded-uri").trim_start_matches('/')
         )));
     }
 }
