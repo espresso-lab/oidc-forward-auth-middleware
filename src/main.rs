@@ -419,8 +419,18 @@ async fn ok_handler(req: &mut Request, res: &mut Response, depot: &mut Depot) {
     // In session store mode, we need to validate the JWT here (async)
     if session_store::is_enabled() {
         let session_id = get_cookie(req, SESSION_COOKIE_NAME);
+        let headers = depot.obtain::<ForwardAuthHeaders>().unwrap();
+        let scopes = depot.obtain::<Vec<Scope>>().unwrap().clone();
+        let client = depot.obtain::<ConfiguredCoreClient>().unwrap();
+
         let Some(mut session) = session_store::get_session(&session_id).await else {
-            res.status_code(StatusCode::UNAUTHORIZED);
+            // Session not found in Redis - clear cookie and redirect to login or return 401
+            res.add_cookie(clear_cookie(SESSION_COOKIE_NAME));
+            if can_redirect_to_login(req) {
+                start_auth_flow(client, headers, scopes, res);
+            } else {
+                res.status_code(StatusCode::UNAUTHORIZED);
+            }
             return;
         };
 
@@ -439,12 +449,23 @@ async fn ok_handler(req: &mut Request, res: &mut Response, depot: &mut Depot) {
             // Token invalid/expired - try inline refresh with distributed locking
             let Ok(new_access_token) = inline_refresh_token(&session_id, &mut session, depot).await
             else {
-                res.status_code(StatusCode::UNAUTHORIZED);
+                // Refresh failed - clear cookie and redirect to login or return 401
+                res.add_cookie(clear_cookie(SESSION_COOKIE_NAME));
+                if can_redirect_to_login(req) {
+                    start_auth_flow(client, headers, scopes, res);
+                } else {
+                    res.status_code(StatusCode::UNAUTHORIZED);
+                }
                 return;
             };
             // Re-validate with new token
             let Ok(claims) = validate_session_token(&new_access_token, oidc_provider) else {
-                res.status_code(StatusCode::UNAUTHORIZED);
+                res.add_cookie(clear_cookie(SESSION_COOKIE_NAME));
+                if can_redirect_to_login(req) {
+                    start_auth_flow(client, headers, scopes, res);
+                } else {
+                    res.status_code(StatusCode::UNAUTHORIZED);
+                }
                 return;
             };
             claims.sub
