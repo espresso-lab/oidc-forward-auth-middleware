@@ -119,6 +119,7 @@ For the latest example have a look at the `docker-compose.yml` file.
 | Environment variable      | Type    | Description                                                                                |
 | ------------------------- | ------- | ------------------------------------------------------------------------------------------ |
 | RUST_LOG                  | String  | info, debug, error, warning                                                                |
+| BIND_ADDRESS              | String  | Default: `0.0.0.0:3000`. The network address to bind to.                                   |
 | DISABLE_ENHANCED_SECURITY | Boolean | Default: `false`. Sets various security HTTP headers and redirects http requests to https. |
 | REDIS_URL                 | String  | Optional. Redis/Valkey connection URL for session store. Example: `redis://localhost:6379` |
 
